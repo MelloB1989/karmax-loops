@@ -1,0 +1,8 @@
+{
+  "name": "hn-digest",
+  "description": "Summarizes the current Hacker News top stories (via the Claude harness) and pushes a morning digest to your KARMAX app.",
+  "version": "0.1.0",
+  "author": "MelloB1989",
+  "tags": ["news", "digest", "example"],
+  "schedule": "0 0 9 * * *"
+}

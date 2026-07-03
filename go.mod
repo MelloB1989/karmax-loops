@@ -1,0 +1,5 @@
+module github.com/0mellob/karmax-loops
+
+go 1.24.4
+
+require github.com/MelloB1989/karmax v0.0.0-20260703110122-8c45fa203e46
