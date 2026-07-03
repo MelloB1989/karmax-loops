@@ -124,7 +124,7 @@
     <div><span class="dot">⟳</span> karmax · loops marketplace</div>
     <nav>
       <a href="#publish">publish a loop</a>
-      <a id="reg-link" href="https://github.com/0mellob/karmax-loops">registry repo</a>
+      <a id="reg-link" href="https://github.com/MelloB1989/karmax-loops">registry repo</a>
       <a href="https://github.com/MelloB1989/KARMAX">karmax</a>
     </nav>
   </header>
@@ -168,7 +168,7 @@
   </section>
 
   <footer>
-    <span>manifests pulled live from <a id="reg-link2" href="https://github.com/0mellob/karmax-loops">the registry</a> — merging a PR is deploying.</span>
+    <span>manifests pulled live from <a id="reg-link2" href="https://github.com/MelloB1989/karmax-loops">the registry</a> — merging a PR is deploying.</span>
     <span>install anything with <code style="color:var(--green)">karmax loops install &lt;name&gt;</code></span>
   </footer>
 </div>
@@ -178,7 +178,7 @@
   "use strict";
   // The registry is this site's own repo by default; override with ?registry=owner/repo.
   var params = new URLSearchParams(location.search);
-  var REG = params.get("registry") || regFromLocation() || "0mellob/karmax-loops";
+  var REG = params.get("registry") || regFromLocation() || "MelloB1989/karmax-loops";
   document.getElementById("reg-link").href = "https://github.com/" + REG;
   document.getElementById("reg-link2").href = "https://github.com/" + REG;
 

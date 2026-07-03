@@ -1,4 +1,4 @@
-module github.com/0mellob/karmax-loops
+module github.com/MelloB1989/karmax-loops
 
 go 1.24.4
 

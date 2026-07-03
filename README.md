@@ -4,7 +4,7 @@ The public marketplace registry for [KARMAX](https://github.com/MelloB1989/KARMA
 recurring automations (news digests, chat sweeps, watchers, syncs) that run inside the
 KARMAX personal AI daemon.
 
-**Browse:** https://0mellob.github.io/karmax-loops/ · or `karmax loops browse`
+**Browse:** https://mellob1989.github.io/karmax-loops/ · or `karmax loops browse`
 
 ## How it works
 
