@@ -12,9 +12,9 @@ KARMAX personal AI daemon.
 
 ## Loops in this registry
 
-**Default** (pre-installed with KARMAX): , , ,
-. **Optional**: , , ,
-, ,  — install with `karmax loops install <name>`.
+**Default** (pre-installed with KARMAX): `tech-news`, `hot-sync`, `profile-refresh`,
+`daily-briefing`. **Optional**: `chat-sweep`, `act-on-pending`, `memory-bootstrap`,
+`gchat-watch`, `cold-scan`, `hn-digest` — install with `karmax loops install <name>`.
 
 ## How it works
 
