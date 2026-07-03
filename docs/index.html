@@ -5,7 +5,10 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>KARMAX Loops — marketplace</title>
 <meta name="description" content="Public marketplace of KARMAX loops: recurring automations for your always-on personal AI daemon.">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ctext y='13' font-size='13'%3E%E2%9F%B3%3C/text%3E%3C/svg%3E">
+<link rel="icon" type="image/png" href="favicon.png">
+<meta property="og:title" content="KARMAX Loops — marketplace">
+<meta property="og:description" content="Recurring automations for your always-on personal AI daemon.">
+<meta property="og:image" content="karmax.png">
 <style>
   :root{
     --bg:#101014; --panel:#17171d; --panel2:#1c1c24; --line:#26262e;
@@ -32,7 +35,8 @@
     padding:14px 0;border-bottom:1px solid var(--line);
     color:var(--muted);font-size:12px;letter-spacing:.04em;
   }
-  header.bar .dot{color:var(--amber)}
+  header.bar .brand{display:flex;align-items:center;gap:9px}
+  header.bar .brand img{border-radius:5px;display:block}
   header.bar nav{display:flex;gap:18px;flex-wrap:wrap}
 
   /* ---- hero: the command ---- */
@@ -121,7 +125,7 @@
 <div class="wrap">
 
   <header class="bar">
-    <div><span class="dot">⟳</span> karmax · loops marketplace</div>
+    <div class="brand"><img src="karmax.png" alt="KARMAX logo" width="22" height="22"> karmax · loops marketplace</div>
     <nav>
       <a href="#publish">publish a loop</a>
       <a id="reg-link" href="https://github.com/MelloB1989/karmax-loops">registry repo</a>

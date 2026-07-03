@@ -1,4 +1,8 @@
-# karmax-loops
+<p align="center">
+  <img src="docs/karmax.png" alt="KARMAX logo" width="96" />
+</p>
+
+<h1 align="center">karmax-loops</h1>
 
 The public marketplace registry for [KARMAX](https://github.com/MelloB1989/KARMAX) loops —
 recurring automations (news digests, chat sweeps, watchers, syncs) that run inside the
