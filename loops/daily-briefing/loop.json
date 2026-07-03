@@ -1,0 +1,11 @@
+{
+  "name": "daily-briefing",
+  "description": "Compiles a morning briefing (calendar, reminders, tech news, open work, pending WhatsApp) and delivers it to the app feed and optionally WhatsApp.",
+  "version": "1.0.0",
+  "author": "MelloB1989",
+  "tags": ["briefing", "default"],
+  "schedule": "0 30 8 * * *",
+  "config": [
+    { "key": "whatsapp", "description": "Optional WhatsApp number/chat to also deliver the briefing to." }
+  ]
+}

@@ -1,0 +1,9 @@
+{
+  "name": "memory-bootstrap",
+  "description": "One-time deep scan of your WhatsApp history via the Claude harness (batched + checkpointed): builds detailed long-term memory, queues actionable items, then goes dormant.",
+  "version": "1.0.0",
+  "author": "MelloB1989",
+  "tags": ["whatsapp", "memory", "bootstrap"],
+  "schedule": "@every 6h",
+  "config": [{ "key": "wacli", "description": "Optional override path to the wacli binary." }]
+}

@@ -1,0 +1,9 @@
+{
+  "name": "chat-sweep",
+  "description": "Reviews your monitored WhatsApp chats for pending items (unanswered questions, promised actions, deadlines) and acts on your behalf, files approvals, or creates reminders.",
+  "version": "1.0.0",
+  "author": "MelloB1989",
+  "tags": ["whatsapp", "proactive"],
+  "schedule": "@every 4h",
+  "config": [{ "key": "wacli", "description": "Optional override path to the wacli binary." }]
+}

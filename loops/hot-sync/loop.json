@@ -1,0 +1,8 @@
+{
+  "name": "hot-sync",
+  "description": "Scans your active WhatsApp chats every few hours and saves the durable facts (commitments, deadlines, decisions, people) to memory.",
+  "version": "1.0.0",
+  "author": "MelloB1989",
+  "tags": ["whatsapp", "memory", "default"],
+  "schedule": "@every 4h"
+}

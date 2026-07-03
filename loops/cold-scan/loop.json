@@ -1,0 +1,15 @@
+{
+  "name": "cold-scan",
+  "description": "Cold-memory pipeline: summarizes older WhatsApp chats (via the cheap summary model) into per-chat context for the memory retrieval sub-agent.",
+  "version": "1.0.0",
+  "author": "MelloB1989",
+  "tags": ["whatsapp", "memory"],
+  "schedule": "@every 45m",
+  "config": [
+    { "key": "wacli", "description": "Optional override path to the wacli binary." },
+    { "key": "per_tick", "description": "Chats summarized per run (default 3)." },
+    { "key": "hot_days", "description": "Operator-activity window that keeps a chat hot (default 14)." },
+    { "key": "min_group_own", "description": "Min own messages for a group to be summarized (default 5)." },
+    { "key": "min_group_own_ratio", "description": "Min own-message fraction for a group (default 0.2)." }
+  ]
+}

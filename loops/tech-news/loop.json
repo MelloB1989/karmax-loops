@@ -1,0 +1,8 @@
+{
+  "name": "tech-news",
+  "description": "Daily web digest of AI/tech/security news, researched by the Claude harness and saved to memory for the morning briefing.",
+  "version": "1.0.0",
+  "author": "MelloB1989",
+  "tags": ["news", "digest", "default"],
+  "schedule": "0 0 9 * * *"
+}

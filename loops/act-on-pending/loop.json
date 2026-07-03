@@ -1,0 +1,12 @@
+{
+  "name": "act-on-pending",
+  "description": "Drains the pending-actions queue filled by scans (e.g. memory-bootstrap): completes what it safely can via gws/WhatsApp, files approvals for real decisions, reminders for operator-only items.",
+  "version": "1.0.0",
+  "author": "MelloB1989",
+  "tags": ["whatsapp", "proactive", "queue"],
+  "schedule": "@every 2h",
+  "config": [
+    { "key": "wacli", "description": "Optional override path to the wacli binary." },
+    { "key": "gws", "description": "Optional override path to the gws (Google Workspace) CLI." }
+  ]
+}

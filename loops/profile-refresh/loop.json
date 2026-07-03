@@ -1,0 +1,8 @@
+{
+  "name": "profile-refresh",
+  "description": "Rewrites the operator's ABOUT_ME profile from recent memory every 12 hours so the agent's model of you stays current.",
+  "version": "1.0.0",
+  "author": "MelloB1989",
+  "tags": ["memory", "profile", "default"],
+  "schedule": "@every 12h"
+}

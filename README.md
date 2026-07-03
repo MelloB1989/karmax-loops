@@ -10,6 +10,12 @@ KARMAX personal AI daemon.
 
 **Browse:** https://mellob1989.github.io/karmax-loops/ · or `karmax loops browse`
 
+## Loops in this registry
+
+**Default** (pre-installed with KARMAX): , , ,
+. **Optional**: , , ,
+, ,  — install with `karmax loops install <name>`.
+
 ## How it works
 
 - Every loop is a directory under [`loops/`](loops/) with a `loop.json` manifest

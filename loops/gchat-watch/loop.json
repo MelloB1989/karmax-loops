@@ -1,0 +1,9 @@
+{
+  "name": "gchat-watch",
+  "description": "Watches Google Chat (via the gws CLI) and proactively acts on new messages: does routine dev asks itself (e.g. close a PR a teammate requested), flags real decisions for approval.",
+  "version": "1.0.0",
+  "author": "MelloB1989",
+  "tags": ["google-chat", "proactive", "dev"],
+  "schedule": "@every 2m",
+  "config": [{ "key": "gws", "description": "Optional override path to the gws (Google Workspace) CLI." }]
+}
