@@ -1,7 +1,7 @@
 {
   "name": "wa-monitor",
   "description": "Event-driven WhatsApp proxy: fires on each incoming message in a monitored chat (wacli webhook, no polling) \u2014 sends routine replies in your voice, files approvals for real decisions, creates reminders for things only you can do.",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "author": "MelloB1989",
   "tags": [
     "whatsapp",
