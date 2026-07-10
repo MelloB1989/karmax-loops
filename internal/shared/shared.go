@@ -49,14 +49,43 @@ func ParseScanOutcomes(out string) (acted, approve, remind []string) {
 		up := strings.ToUpper(line)
 		switch {
 		case strings.HasPrefix(up, "ACTED"):
-			acted = append(acted, strings.TrimSpace(line[len("ACTED"):]))
+			if item := strings.TrimSpace(line[len("ACTED"):]); MeaningfulItem(item) {
+				acted = append(acted, item)
+			}
 		case strings.HasPrefix(up, "APPROVE"):
-			approve = append(approve, strings.TrimSpace(line[len("APPROVE"):]))
+			if item := strings.TrimSpace(line[len("APPROVE"):]); MeaningfulItem(item) {
+				approve = append(approve, item)
+			}
 		case strings.HasPrefix(up, "REMIND"):
-			remind = append(remind, strings.TrimSpace(line[len("REMIND"):]))
+			if item := strings.TrimSpace(line[len("REMIND"):]); MeaningfulItem(item) {
+				remind = append(remind, item)
+			}
 		}
 	}
 	return acted, approve, remind
+}
+
+// MeaningfulItem reports whether a parsed scan item carries real content. The
+// harness (especially a weak brain) sometimes emits a placeholder outcome line
+// like "APPROVE: none", "APPROVE (none)", or "APPROVE — none" that really means
+// "nothing here" — the SKIP case in disguise. Those produced empty
+// "Decision — (none)" approvals, so drop any item whose payload, once stripped
+// of separator/wrapping punctuation, is empty or a placeholder word.
+func MeaningfulItem(item string) bool {
+	s := strings.TrimSpace(item)
+	// Drop a "| due:" tail before judging (REMIND items carry a deadline).
+	if head, _, ok := strings.Cut(s, "| due:"); ok {
+		s = strings.TrimSpace(head)
+	}
+	s = strings.Trim(s, " \t:—–-()[]{}\"'.")
+	s = strings.TrimSpace(s)
+	switch strings.ToLower(s) {
+	case "", "none", "n/a", "na", "nil", "null", "nothing",
+		"nothing needed", "no action", "no action needed",
+		"none needed", "nothing to do", "no reply needed", "skip":
+		return false
+	}
+	return true
 }
 
 // ProposeItems files one pending APPROVAL per APPROVE item a loop surfaced
