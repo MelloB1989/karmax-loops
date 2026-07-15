@@ -175,11 +175,17 @@ func sendAwayNote(ctx context.Context, k loopkit.Kit, chatID, who string, incomi
 	if isGroup {
 		setting = "a WhatsApp group where the operator was @-mentioned"
 	}
+	// Who the operator is, for the note's wording. Configurable per install
+	// (KARMAX_LOOP_WA_MONITOR_OPERATOR_NAME); generic when unset.
+	operatorRef := strings.TrimSpace(k.Config("operator_name"))
+	if operatorRef == "" {
+		operatorRef = "the account owner"
+	}
 	note, err := k.Summarize(ctx,
-		"Compose a short WhatsApp message (1-2 sentences) to send in "+setting+" on behalf of the operator, who is currently away.\n\n"+
-			"Sender/chat: "+who+"\n"+
+		"Compose a short WhatsApp message (1-2 sentences) to send in "+setting+" on behalf of the operator ("+operatorRef+"), who is currently away.\n\n"+
+			"Sender/chat (the OTHER person — NOT the operator; never present yourself as their assistant): "+who+"\n"+
 			"Their message: "+truncate(incoming, 400)+"\n\n"+
-			"The message must, in your own natural words: identify itself as KARMAX, the operator's assistant; say the operator is away from their phone right now; briefly acknowledge what the sender asked/said (so it doesn't feel canned); and assure them the operator has been notified and will get back to them. "+
+			"The message must, in your own natural words: identify itself as KARMAX, the assistant of the operator ("+operatorRef+"); say the operator is away from their phone right now; briefly acknowledge what the sender asked/said (so it doesn't feel canned); and assure them the operator has been notified and will get back to them. "+
 			"Warm, human, concise. No emojis unless natural, no markdown, no quotes around the text, no signature. Output ONLY the message text.")
 	note = strings.TrimSpace(strings.Trim(strings.TrimSpace(note), `"“”`))
 	if err != nil || note == "" || shared.LooksLikeError(note) {
