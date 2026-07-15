@@ -6,11 +6,21 @@
 // operator-only items become phone reminders. Which chats are monitored is
 // decided by the wacli webhook's scope (managed via the agent's
 // whatsapp.monitor tool) — nothing is hardcoded here.
+//
+// NO MESSAGE THAT EXPECTS A RESPONSE GOES UNANSWERED: when the harness can't
+// (or shouldn't) reply in the operator's voice — it flagged APPROVE/REMIND, or
+// it failed outright — the loop itself sends a brief assistant note ("Kartik's
+// away; I'm KARMAX, I've notified him") in DMs and group-mentions, rate-limited
+// per chat so the same conversation never gets it twice in a row.
 package wamonitor
 
 import (
 	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/MelloB1989/karmax-loops/internal/shared"
 	"github.com/MelloB1989/karmax/pkg/loopkit"
@@ -19,11 +29,16 @@ import (
 func init() {
 	loopkit.Register(loopkit.Loop{
 		Name:        "wa-monitor",
-		Description: "Event-driven WhatsApp proxy: on each message in a monitored chat, acts for the operator (routine replies), files approvals for decisions, reminders for operator-only items.",
+		Description: "Event-driven WhatsApp proxy: on each message in a monitored chat, acts for the operator (routine replies), files approvals for decisions, reminders for operator-only items — and when it can't reply in the operator's voice, acknowledges the sender with an assistant away-note so no one is left hanging.",
 		Events:      []string{"comms.message"},
 		Run:         run,
 	})
 }
+
+// awayNoteCooldown is how long after sending an away-note to a chat before the
+// loop will send another one there — the flag/approval still happens every
+// time; only the sender-facing note is deduplicated.
+const awayNoteCooldown = 6 * time.Hour
 
 func run(ctx context.Context, k loopkit.Kit) error {
 	t := k.Trigger()
@@ -78,18 +93,25 @@ func run(ctx context.Context, k loopkit.Kit) error {
 		operatorDesc = "the operator (their own numbers/JIDs: " + strings.Join(ids, ", ") + ")"
 	}
 
+	// addressed = someone is talking TO the operator and expects a response
+	// (any DM message, or a group message that @-mentions them). These must
+	// never end in silence: either the harness replies, or the loop sends the
+	// assistant away-note below.
+	addressed := !isGroup || mentioned
+
 	context_ := "A monitored 1:1 chat just messaged " + operatorDesc + "."
-	policy := "   - If a reply/action is ROUTINE and you're confident how the operator would respond (acknowledgements, simple scheduling, sharing already-known info, confirming availability), DO IT NOW: send with `" + wacli + " send --to " + chatID + " --text \"...\"` in the operator's natural human voice (concise; never say you're an AI/assistant). Use the `gws` CLI for calendar/email if clearly asked.\n" +
-		"   - If it involves a real DECISION, a commitment, money, or anything sensitive/ambiguous, or you're not confident → DO NOT send anything; flag it as APPROVE.\n" +
-		"   - If it's something ONLY the operator can personally do (send a document/file you don't have, a personal reply, an offline task): flag it as REMIND.\n"
+	policy := "   - LEAN TOWARD REPLYING. If a reply/action is routine and you're reasonably sure how the operator would respond (acknowledgements, answering things you know from context, simple scheduling, sharing already-known info, confirming availability, a natural conversational reply), SEND IT NOW: `" + wacli + " send --to " + chatID + " --text \"...\"` in the operator's natural human voice (concise; never say you're an AI/assistant when speaking AS the operator). Use the `gws` CLI for calendar/email if clearly asked. When in doubt between replying and staying silent, REPLY.\n" +
+		"   - Flag APPROVE only for a real DECISION, a commitment, money, or something genuinely sensitive where a wrong reply causes harm — include your suggested reply. Do NOT send anything yourself in that case, and do NOT send any \"he's away\" placeholder — the system automatically acknowledges the sender when you flag APPROVE or REMIND.\n" +
+		"   - If it's something ONLY the operator can personally do (send a document/file you don't have, a personal reply, an offline task): flag it as REMIND.\n" +
+		"   - SKIP is ONLY for messages that need no response at all (chatter, FYIs, spam). If the sender expects ANY response, never SKIP — reply or flag it.\n"
 	if isGroup && mentioned {
 		// The operator was DIRECTLY @-mentioned — they are unambiguously being
 		// addressed. A mention must never be silently ignored.
 		context_ = "A monitored GROUP chat just @-MENTIONED " + operatorDesc + " directly — they are being addressed and a response is expected."
 		policy = "   - The operator was DIRECTLY @-mentioned, so you MUST respond somehow — never SKIP this.\n" +
-			"   - If you can answer routinely in the operator's voice (a question you know the answer to, an acknowledgement, availability, a simple follow-up): reply NOW via `" + wacli + " send --to " + chatID + " --text \"...\"` (concise, human, never reveal you're an AI).\n" +
-			"   - If it needs a real DECISION, a commitment, money, or anything sensitive/ambiguous, or you're not confident: DO NOT send — flag it as APPROVE with your suggested reply so the operator decides.\n" +
-			"   - Only if it's something ONLY the operator can personally do: flag REMIND. But a plain mention with a question defaults to a reply.\n"
+			"   - LEAN TOWARD REPLYING in the operator's voice (a question you can answer, an acknowledgement, availability, a follow-up): reply NOW via `" + wacli + " send --to " + chatID + " --text \"...\"` (concise, human, never reveal you're an AI when speaking AS the operator).\n" +
+			"   - Flag APPROVE (with your suggested reply) only for a real DECISION, commitment, money, or something genuinely sensitive. Do NOT send a \"he's away\" placeholder yourself — the system acknowledges the sender automatically when you flag.\n" +
+			"   - Only if it's something ONLY the operator can personally do: flag REMIND. A plain mention with a question defaults to a reply.\n"
 	} else if isGroup {
 		context_ = "A monitored GROUP chat just had a new message. " + operatorDesc + " is a member but was NOT @-mentioned."
 		policy = "   - This is a GROUP and the operator was NOT directly @-mentioned. Only SEND a reply if the operator is clearly being asked a question they must answer. Reply via `" + wacli + " send --to " + chatID + " --text \"...\"` in the operator's casual voice, and only for genuinely routine/known answers.\n" +
@@ -114,14 +136,77 @@ func run(ctx context.Context, k loopkit.Kit) error {
 	out, err := k.Harness(ctx, prompt)
 	if err != nil || shared.LooksLikeError(out) {
 		// Never fail silently: the operator must know a monitored message went
-		// unhandled (especially while they sleep).
+		// unhandled (especially while they sleep) — and the SENDER shouldn't be
+		// left hanging either.
 		k.Logf("wa-monitor: harness failed for %s: %v %.120s", who, err, out)
 		_ = k.Notify("⚠️ Couldn't handle — "+who,
 			"A monitored message needs you (assistant failed): "+truncate(content, 200))
+		if addressed {
+			sendAwayNote(ctx, k, chatID, who)
+		}
 		return nil
 	}
-	report(k, who, lastLine(out))
+	outcome := lastLine(out)
+	report(k, who, outcome)
+
+	// The harness flagged instead of replying (APPROVE/REMIND) while the sender
+	// was talking TO the operator — acknowledge them as the assistant so the
+	// message never just hangs. Deterministic (Go, not the model) + rate-limited.
+	upper := strings.ToUpper(strings.TrimSpace(outcome))
+	if addressed && (strings.HasPrefix(upper, "APPROVE") || strings.HasPrefix(upper, "REMIND")) {
+		sendAwayNote(ctx, k, chatID, who)
+	}
 	return nil
+}
+
+// sendAwayNote tells the sender the operator is away and KARMAX has notified
+// them. At most one note per chat per awayNoteCooldown — the flag/approval
+// itself still happens for every message.
+func sendAwayNote(ctx context.Context, k loopkit.Kit, chatID, who string) {
+	state, path := loadAwayState()
+	if last, ok := state[chatID]; ok && time.Since(time.Unix(last, 0)) < awayNoteCooldown {
+		return
+	}
+	note := "Hey, Kartik is away from his phone right now — this is KARMAX, his assistant. " +
+		"I've flagged your message and notified him; he'll get back to you soon."
+	if err := k.SendWhatsApp(ctx, chatID, note); err != nil {
+		k.Logf("wa-monitor: away-note to %s failed: %v", who, err)
+		return
+	}
+	k.Logf("wa-monitor: sent away-note to %s", who)
+	state[chatID] = time.Now().Unix()
+	saveAwayState(path, state)
+}
+
+func awayStatePath() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".karmax", "wa-monitor-away.json")
+}
+
+func loadAwayState() (map[string]int64, string) {
+	path := awayStatePath()
+	state := map[string]int64{}
+	if path == "" {
+		return state, path
+	}
+	if b, err := os.ReadFile(path); err == nil {
+		_ = json.Unmarshal(b, &state)
+	}
+	return state, path
+}
+
+func saveAwayState(path string, state map[string]int64) {
+	if path == "" {
+		return
+	}
+	b, err := json.Marshal(state)
+	if err != nil {
+		return
+	}
+	_ = os.WriteFile(path, b, 0o644)
 }
 
 // report routes the harness outcome deterministically: ACTED → informational
