@@ -142,7 +142,7 @@ func run(ctx context.Context, k loopkit.Kit) error {
 		_ = k.Notify("⚠️ Couldn't handle — "+who,
 			"A monitored message needs you (assistant failed): "+truncate(content, 200))
 		if addressed {
-			sendAwayNote(ctx, k, chatID, who)
+			sendAwayNote(ctx, k, chatID, who, content, isGroup)
 		}
 		return nil
 	}
@@ -151,25 +151,44 @@ func run(ctx context.Context, k loopkit.Kit) error {
 
 	// The harness flagged instead of replying (APPROVE/REMIND) while the sender
 	// was talking TO the operator — acknowledge them as the assistant so the
-	// message never just hangs. Deterministic (Go, not the model) + rate-limited.
+	// message never just hangs. The TRIGGER is deterministic (Go decides an
+	// acknowledgement must happen, rate-limited); the WORDING is the LLM's.
 	upper := strings.ToUpper(strings.TrimSpace(outcome))
 	if addressed && (strings.HasPrefix(upper, "APPROVE") || strings.HasPrefix(upper, "REMIND")) {
-		sendAwayNote(ctx, k, chatID, who)
+		sendAwayNote(ctx, k, chatID, who, content, isGroup)
 	}
 	return nil
 }
 
 // sendAwayNote tells the sender the operator is away and KARMAX has notified
-// them. At most one note per chat per awayNoteCooldown — the flag/approval
-// itself still happens for every message.
-func sendAwayNote(ctx context.Context, k loopkit.Kit, chatID, who string) {
+// them. The note itself is COMPOSED BY THE LLM (contextual to the sender and
+// their message — nothing canned); Go only guarantees it happens and
+// rate-limits it: at most one note per chat per awayNoteCooldown. The
+// flag/approval itself still files for every message.
+func sendAwayNote(ctx context.Context, k loopkit.Kit, chatID, who string, incoming string, isGroup bool) {
 	state, path := loadAwayState()
 	if last, ok := state[chatID]; ok && time.Since(time.Unix(last, 0)) < awayNoteCooldown {
 		return
 	}
-	note := "Hey, Kartik is away from his phone right now — this is KARMAX, his assistant. " +
-		"I've flagged your message and notified him; he'll get back to you soon."
-	if err := k.SendWhatsApp(ctx, chatID, note); err != nil {
+
+	setting := "a 1:1 WhatsApp chat"
+	if isGroup {
+		setting = "a WhatsApp group where the operator was @-mentioned"
+	}
+	note, err := k.Summarize(ctx,
+		"Compose a short WhatsApp message (1-2 sentences) to send in "+setting+" on behalf of the operator, who is currently away.\n\n"+
+			"Sender/chat: "+who+"\n"+
+			"Their message: "+truncate(incoming, 400)+"\n\n"+
+			"The message must, in your own natural words: identify itself as KARMAX, the operator's assistant; say the operator is away from their phone right now; briefly acknowledge what the sender asked/said (so it doesn't feel canned); and assure them the operator has been notified and will get back to them. "+
+			"Warm, human, concise. No emojis unless natural, no markdown, no quotes around the text, no signature. Output ONLY the message text.")
+	note = strings.TrimSpace(strings.Trim(strings.TrimSpace(note), `"“”`))
+	if err != nil || note == "" || shared.LooksLikeError(note) {
+		// Couldn't compose — don't send canned text; the operator is already
+		// notified via the APPROVE/notify path, so just log it.
+		k.Logf("wa-monitor: away-note compose failed for %s: %v %.80s", who, err, note)
+		return
+	}
+	if err := k.SendWhatsApp(ctx, chatID, truncate(note, 500)); err != nil {
 		k.Logf("wa-monitor: away-note to %s failed: %v", who, err)
 		return
 	}
