@@ -5,6 +5,7 @@ package gchatwatch
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -29,6 +30,25 @@ const (
 )
 
 var gchatMu sync.Mutex
+
+// gchatAuthDown latches the Google-auth state so the operator is alerted ONCE
+// when gws loses authentication (Google's periodic reauth for sensitive scopes
+// invalidates the token — "invalid_rapt"/"invalid_grant"/exit 2), and once more
+// when it recovers — instead of failing silently every 2 minutes. Guarded by
+// gchatMu, which the run holds. errGchatAuth is the sentinel for that state.
+var gchatAuthDown bool
+
+type gchatAuthError struct{ detail string }
+
+func (e *gchatAuthError) Error() string { return "google auth: " + e.detail }
+
+func isGchatAuthError(s string) bool {
+	l := strings.ToLower(s)
+	return strings.Contains(l, "invalid_rapt") || strings.Contains(l, "invalid_grant") ||
+		strings.Contains(l, "autherror") || strings.Contains(l, "auth error") ||
+		strings.Contains(l, "reauth") || strings.Contains(l, "credentials missing") ||
+		strings.Contains(l, "unauthenticated") || strings.Contains(l, "401")
+}
 
 func init() {
 	loopkit.Register(loopkit.Loop{
@@ -65,7 +85,26 @@ func runGchatWatch(ctx context.Context, k loopkit.Kit) error {
 
 	spaces, err := listGchatSpaces(ctx, gws)
 	if err != nil {
+		var authErr *gchatAuthError
+		if errors.As(err, &authErr) {
+			// Latched: alert the operator ONCE (Google reauth for sensitive
+			// scopes needs an interactive `gws auth login` on the host — it
+			// can't be refreshed non-interactively), and stop spamming a WARN
+			// every 2 minutes. Recovery is announced below.
+			if !gchatAuthDown {
+				gchatAuthDown = true
+				msg := "⚠️ Google Workspace access expired (Google Chat/Gmail/Calendar via gws). Run `gws auth login` on the KARMAX host to reconnect — until then I can't watch or act on Google Chat. (" + authErr.detail + ")"
+				_ = k.Notify("⚠️ Google access expired", msg)
+				k.Logf("gchat-watch: google auth DOWN — %s", authErr.detail)
+			}
+			return nil
+		}
 		return fmt.Errorf("gchat-watch: list spaces: %w", err)
+	}
+	if gchatAuthDown {
+		gchatAuthDown = false
+		_ = k.Notify("✅ Google access restored", "Google Workspace is reconnected — I'm watching Google Chat again.")
+		k.Logf("gchat-watch: google auth restored")
 	}
 
 	// Find spaces with activity newer than our checkpoint.
@@ -146,9 +185,18 @@ func runGchatWatch(ctx context.Context, k loopkit.Kit) error {
 func listGchatSpaces(ctx context.Context, gws string) ([]gchatSpace, error) {
 	cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(cctx, gws, "chat", "spaces", "list", "--format", "json").Output()
+	// CombinedOutput so an auth failure's stderr/JSON is available to classify
+	// (Google returns the reauth detail there, and gws exits 2).
+	out, err := exec.CommandContext(cctx, gws, "chat", "spaces", "list", "--format", "json").CombinedOutput()
 	if err != nil {
-		return nil, err
+		if isGchatAuthError(string(out)) || strings.Contains(err.Error(), "exit status 2") {
+			return nil, &gchatAuthError{detail: firstLine(string(out))}
+		}
+		return nil, fmt.Errorf("%v: %s", err, strings.TrimSpace(firstLine(string(out))))
+	}
+	// A successful call can still carry an auth-error JSON body (gws exits 0).
+	if isGchatAuthError(string(out)) {
+		return nil, &gchatAuthError{detail: firstLine(string(out))}
 	}
 	var resp struct {
 		Spaces []gchatSpace `json:"spaces"`
@@ -157,6 +205,17 @@ func listGchatSpaces(ctx context.Context, gws string) ([]gchatSpace, error) {
 		return nil, err
 	}
 	return resp.Spaces, nil
+}
+
+func firstLine(s string) string {
+	s = strings.TrimSpace(s)
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		s = s[:i]
+	}
+	if len(s) > 200 {
+		s = s[:200]
+	}
+	return s
 }
 
 func gchatStatePath() (string, error) {
