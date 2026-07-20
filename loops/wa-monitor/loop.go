@@ -127,7 +127,7 @@ func run(ctx context.Context, k loopkit.Kit) error {
 		"Steps:\n" +
 		"1. Read recent context: run `" + wacli + " messages --chat " + chatID + " --limit 15` (newest last). If it's already handled/answered and nothing new is needed, do nothing.\n" +
 		"2. Decide on the operator's behalf:\n" + policy +
-		"3. Output EXACTLY one line, beginning with one of:\n" +
+		"3. REQUIRED: end your response with EXACTLY one outcome line — the VERY LAST line, beginning with one of these verbs (this is mandatory even if you already replied or acted; if you omit it the message is treated as unhandled and escalated):\n" +
 		"   ACTED: <one line on what you sent/did>\n" +
 		"   APPROVE: <what it is + your suggested reply/action, for the operator>\n" +
 		"   REMIND: <something ONLY the operator can personally do> | due: <ISO-8601 with timezone; omit '| due:' if no concrete deadline>\n" +
@@ -147,14 +147,26 @@ func run(ctx context.Context, k loopkit.Kit) error {
 		return nil
 	}
 	outcome := lastLine(out)
-	report(k, who, outcome)
+	kind := report(k, who, outcome)
+
+	// A monitored message must NEVER silently vanish. If the harness produced no
+	// clean outcome (empty) or unrecognized prose (unknown) — e.g. it read the
+	// chat but didn't declare a decision — surface it to the operator instead of
+	// dropping it. This is the "Siva replied but KARMAX did nothing" gap.
+	if kind == "empty" || kind == "unknown" {
+		_ = k.Notify("👀 Needs a look — "+who,
+			"I saw a message in a monitored chat but couldn't cleanly decide what to do — take a look:\n"+truncate(content, 300))
+		if addressed {
+			sendAwayNote(ctx, k, chatID, who, content, isGroup)
+		}
+		return nil
+	}
 
 	// The harness flagged instead of replying (APPROVE/REMIND) while the sender
 	// was talking TO the operator — acknowledge them as the assistant so the
 	// message never just hangs. The TRIGGER is deterministic (Go decides an
 	// acknowledgement must happen, rate-limited); the WORDING is the LLM's.
-	upper := strings.ToUpper(strings.TrimSpace(outcome))
-	if addressed && (strings.HasPrefix(upper, "APPROVE") || strings.HasPrefix(upper, "REMIND")) {
+	if addressed && (kind == "approve" || kind == "remind") {
 		sendAwayNote(ctx, k, chatID, who, content, isGroup)
 	}
 	return nil
@@ -234,13 +246,13 @@ func saveAwayState(path string, state map[string]int64) {
 	_ = os.WriteFile(path, b, 0o644)
 }
 
-// report routes the harness outcome deterministically: ACTED → informational
-// notification, APPROVE → approvals inbox, REMIND → phone reminder, SKIP → log.
-func report(k loopkit.Kit, who, outcome string) {
+// report routes the harness outcome deterministically and ALWAYS logs the
+// decision (so a "why didn't it act?" is answerable from the journal). Returns
+// the classified kind: "acted" | "approve" | "remind" | "skip" | "empty"
+// (harness emitted no outcome line) | "unknown" (emitted prose that matches no
+// verb). The caller surfaces empty/unknown so a message is never silently lost.
+func report(k loopkit.Kit, who, outcome string) string {
 	outcome = strings.TrimSpace(outcome)
-	if outcome == "" {
-		return
-	}
 	upper := strings.ToUpper(outcome)
 	detail := func(prefix string) string {
 		d := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(outcome[len(prefix):]), ":"))
@@ -250,26 +262,41 @@ func report(k loopkit.Kit, who, outcome string) {
 		return d
 	}
 	switch {
+	case outcome == "":
+		k.Logf("wa-monitor: %s — harness returned NO outcome line (will surface)", who)
+		return "empty"
 	case strings.HasPrefix(upper, "SKIP"):
-		k.Logf("wa-monitor: nothing needed for %s", who)
+		k.Logf("wa-monitor: SKIP %s — %s", who, truncate(detail("SKIP"), 160))
+		return "skip"
 	case strings.HasPrefix(upper, "APPROVE"):
+		k.Logf("wa-monitor: APPROVE %s — %s", who, truncate(detail("APPROVE"), 160))
 		if err := k.Propose("Decision — "+who,
 			"The wa-monitor loop flagged this while handling a monitored chat.", detail("APPROVE")); err != nil {
 			k.Logf("wa-monitor: propose failed: %v (falling back to notification)", err)
 			_ = k.Notify("🤔 Needs your decision — "+who, outcome)
 		}
+		return "approve"
 	case strings.HasPrefix(upper, "REMIND"):
 		item := detail("REMIND")
 		due := ""
 		if head, tail, ok := strings.Cut(item, "| due:"); ok {
 			item, due = strings.TrimSpace(head), strings.TrimSpace(tail)
 		}
+		k.Logf("wa-monitor: REMIND %s — %s", who, truncate(item, 160))
 		if err := k.Remind(truncate(item, 100), due, "From "+who+" (wa-monitor): only you can do this one."); err != nil {
 			k.Logf("wa-monitor: remind failed: %v (falling back to notification)", err)
 			_ = k.Notify("⏰ You need to do this — "+who, item)
 		}
-	default: // ACTED or freeform
+		return "remind"
+	case strings.HasPrefix(upper, "ACTED"):
+		k.Logf("wa-monitor: ACTED %s — %s", who, truncate(detail("ACTED"), 160))
 		_ = k.Notify("✅ Handled — "+who, outcome)
+		return "acted"
+	default:
+		// Non-empty but no recognized verb — the harness did something/rambled
+		// but didn't declare a clean outcome. Don't fake "Handled"; surface it.
+		k.Logf("wa-monitor: UNPARSEABLE outcome for %s — %s", who, truncate(outcome, 160))
+		return "unknown"
 	}
 }
 
