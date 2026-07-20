@@ -129,7 +129,8 @@ func run(ctx context.Context, k loopkit.Kit) error {
 		context_ = "A monitored GROUP chat just had a new message. " + operatorDesc + " is a member but was NOT @-mentioned."
 		policy = "   - This is a GROUP and the operator was NOT directly @-mentioned. Only SEND a reply if the operator is clearly being asked a question they must answer. Reply via `" + wacli + " send --to " + chatID + " --text \"...\"` in the operator's casual voice, and only for genuinely routine/known answers.\n" +
 			"   - Do NOT reply to general group discussion or messages meant for other members.\n" +
-			"   - If the message is a meaningful update on an active project/deal/commitment (e.g. a client saying they'll get back, a deadline, a decision) but needs no reply, flag it as APPROVE so the operator sees it — do not silently skip important client/deal activity.\n" +
+			"   - If the message is a meaningful update on an active project/deal/commitment (e.g. a client saying they'll get back, a payment confirmation, a deadline) but needs no reply or decision, use INFORM so the operator gets a notification — do NOT file it as an APPROVE (that inbox is for real decisions only), and do not silently skip important client/deal activity.\n" +
+			"   - Reserve APPROVE for a genuine decision the operator must make (spend/pricing/scope/commitment/sensitive).\n" +
 			"   - Only truly irrelevant chatter is SKIP.\n"
 	}
 
@@ -140,11 +141,12 @@ func run(ctx context.Context, k loopkit.Kit) error {
 		"Steps:\n" +
 		"1. Read recent context: run `" + wacli + " messages --chat " + chatID + " --limit 15` (newest last). If it's already handled/answered and nothing new is needed, do nothing.\n" +
 		"2. Decide on the operator's behalf:\n" + policy +
-		"3. REQUIRED: end your response with EXACTLY one outcome line — the VERY LAST line, beginning with one of these verbs (this is mandatory even if you already replied or acted; if you omit it the message is treated as unhandled and escalated):\n" +
-		"   ACTED: <one line on what you sent/did>\n" +
-		"   APPROVE: <what it is + your suggested reply/action, for the operator>\n" +
+		"3. REQUIRED: end your response with EXACTLY one outcome line — the VERY LAST line, beginning with one of these verbs (mandatory even if you already replied or acted; if you omit it the message is treated as unhandled and escalated). Choose CAREFULLY — do NOT use APPROVE for things you can handle yourself or for pure updates:\n" +
+		"   ACTED: <what you sent/did on the operator's behalf — prefer this for anything routine>\n" +
+		"   APPROVE: <ONLY a real decision the operator must personally make — approving spend/pricing/scope, a commitment, something risky/irreversible/sensitive — plus your suggested reply. If you could handle it, ACT. If it just needs them to know, INFORM.>\n" +
 		"   REMIND: <something ONLY the operator can personally do> | due: <ISO-8601 with timezone; omit '| due:' if no concrete deadline>\n" +
-		"   SKIP: <why nothing was needed>"
+		"   INFORM: <an update the operator should simply KNOW — a payment/receipt confirmation, a status update, 'they'll get back to us', a doc received — needs NO decision and NO reply. Becomes a notification, not an approval.>\n" +
+		"   SKIP: <nothing worth surfacing — chatter, noise, already handled>"
 
 	out, err := k.Harness(ctx, prompt)
 	if err != nil || shared.LooksLikeError(out) {
@@ -301,6 +303,13 @@ func report(k loopkit.Kit, who, outcome string) string {
 			_ = k.Notify("⏰ You need to do this — "+who, item)
 		}
 		return "remind"
+	case strings.HasPrefix(upper, "INFORM"):
+		// FYI update the operator should know but that needs NO decision — a
+		// notification, NOT an approval. This is what stops "notification sent
+		// as an approval".
+		k.Logf("wa-monitor: INFORM %s — %s", who, truncate(detail("INFORM"), 160))
+		_ = k.Notify("📣 Update — "+who, detail("INFORM"))
+		return "inform"
 	case strings.HasPrefix(upper, "ACTED"):
 		k.Logf("wa-monitor: ACTED %s — %s", who, truncate(detail("ACTED"), 160))
 		_ = k.Notify("✅ Handled — "+who, outcome)

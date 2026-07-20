@@ -89,12 +89,13 @@ func runActOnPending(ctx context.Context, k loopkit.Kit) error {
 		return fmt.Errorf("act-on-pending: harness returned error/refusal: %.120s", out)
 	}
 
-	acted, approve, remind := shared.ParseScanOutcomes(out)
-	k.Logf("act-on-pending: %d items — %d acted, %d need approval, %d reminders", len(items), len(acted), len(approve), len(remind))
+	acted, approve, remind, inform := shared.ParseScanOutcomes(out)
+	k.Logf("act-on-pending: %d items — %d acted, %d need approval, %d reminders, %d fyi", len(items), len(acted), len(approve), len(remind), len(inform))
 	if len(acted) > 0 {
 		_ = k.Notify("✅ Completed from scan", "• "+strings.Join(acted, "\n• "))
 	}
 	shared.ProposeItems(k, "Flagged by the act-on-pending loop from items discovered in WhatsApp scans.", approve)
 	shared.RemindItems(k, "Flagged by the act-on-pending loop: only you can do this one.", remind)
+	shared.InformItems(k, "📣 Update from scan", inform)
 	return nil
 }

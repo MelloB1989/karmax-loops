@@ -172,13 +172,14 @@ func runGchatWatch(ctx context.Context, k loopkit.Kit) error {
 	}
 	saveGchatState(statePath, state)
 
-	acted, approve, remind := shared.ParseScanOutcomes(out)
-	k.Logf("gchat-watch: %d spaces — %d acted, %d need approval, %d reminders", len(work), len(acted), len(approve), len(remind))
+	acted, approve, remind, inform := shared.ParseScanOutcomes(out)
+	k.Logf("gchat-watch: %d spaces — %d acted, %d need approval, %d reminders, %d fyi", len(work), len(acted), len(approve), len(remind), len(inform))
 	if len(acted) > 0 {
 		_ = k.Notify("✅ Handled on Google Chat", "• "+strings.Join(acted, "\n• "))
 	}
 	shared.ProposeItems(k, "Flagged by the gchat-watch loop from Google Chat activity.", approve)
 	shared.RemindItems(k, "Flagged by the gchat-watch loop: only you can do this one.", remind)
+	shared.InformItems(k, "📣 Google Chat update", inform)
 	return nil
 }
 

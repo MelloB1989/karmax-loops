@@ -75,13 +75,14 @@ func runChatSweep(ctx context.Context, k loopkit.Kit) error {
 		return fmt.Errorf("chat-sweep: harness returned error/refusal: %.120s", out)
 	}
 
-	acted, approve, remind := shared.ParseScanOutcomes(out)
-	k.Logf("chat-sweep: %d chats reviewed — %d acted, %d need approval, %d reminders", len(chats), len(acted), len(approve), len(remind))
+	acted, approve, remind, inform := shared.ParseScanOutcomes(out)
+	k.Logf("chat-sweep: %d chats reviewed — %d acted, %d need approval, %d reminders, %d fyi", len(chats), len(acted), len(approve), len(remind), len(inform))
 
 	if len(acted) > 0 {
 		_ = k.Notify("✅ Handled while sweeping", "• "+strings.Join(acted, "\n• "))
 	}
 	shared.ProposeItems(k, "Flagged by the chat-sweep loop while reviewing monitored WhatsApp chats.", approve)
 	shared.RemindItems(k, "Flagged by the chat-sweep loop: only you can do this one.", remind)
+	shared.InformItems(k, "📣 Update from your chats", inform)
 	return nil
 }

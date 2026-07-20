@@ -35,15 +35,17 @@ func LooksLikeError(s string) bool {
 // ScanOutputSpec is the output grammar scan loops ask the harness for. Each
 // category is handled deterministically: ACTED → informational notification,
 // APPROVE → approvals-inbox proposal, REMIND → phone reminder.
-const ScanOutputSpec = "Output EXACTLY one line per item, no other text:\n" +
-	"ACTED <who/what>: <what you sent/did>\n" +
-	"APPROVE <who/what>: <the open item + your suggested reply/action, for the operator to approve>\n" +
+const ScanOutputSpec = "Output EXACTLY one line per item, no other text. Choose the outcome CAREFULLY — APPROVE is ONLY for a genuine decision the operator must personally make; do NOT use it for updates, FYIs, or things you can handle yourself:\n" +
+	"ACTED <who/what>: <what you sent/did on the operator's behalf — prefer this; handle the routine yourself>\n" +
+	"APPROVE <who/what>: <ONLY a real decision that is the operator's to make — approving spend/pricing/scope, a commitment, or something risky/irreversible/sensitive where a wrong move is costly — plus your suggested action. If you're capable of handling it, ACT instead. If it just needs the operator to KNOW, use INFORM.>\n" +
 	"REMIND <who/what>: <something ONLY the operator can personally do — send a document/file you don't have, reply in a personal chat, an offline task> | due: <ISO-8601 datetime with timezone; omit '| due:' entirely if there is no concrete deadline>\n" +
-	"SKIP <who/what>: <why nothing is needed>"
+	"INFORM <who/what>: <an update the operator should simply KNOW that needs NO decision and NO reply — a payment/receipt confirmation, a status update, 'they'll get back to us', a document received. This becomes a notification, NOT an approval.>\n" +
+	"SKIP <who/what>: <nothing worth surfacing at all — chatter, noise, already handled>"
 
 // ParseScanOutcomes splits harness scan output into the standard categories
-// (SKIP lines are dropped).
-func ParseScanOutcomes(out string) (acted, approve, remind []string) {
+// (SKIP lines are dropped). INFORM carries FYI updates that must NOT clutter the
+// approvals inbox — they route to a plain notification instead.
+func ParseScanOutcomes(out string) (acted, approve, remind, inform []string) {
 	for _, line := range strings.Split(out, "\n") {
 		line = strings.TrimSpace(line)
 		up := strings.ToUpper(line)
@@ -60,9 +62,13 @@ func ParseScanOutcomes(out string) (acted, approve, remind []string) {
 			if item := strings.TrimSpace(line[len("REMIND"):]); MeaningfulItem(item) {
 				remind = append(remind, item)
 			}
+		case strings.HasPrefix(up, "INFORM"):
+			if item := strings.TrimSpace(line[len("INFORM"):]); MeaningfulItem(item) {
+				inform = append(inform, item)
+			}
 		}
 	}
-	return acted, approve, remind
+	return acted, approve, remind, inform
 }
 
 // MeaningfulItem reports whether a parsed scan item carries real content. The
@@ -86,6 +92,23 @@ func MeaningfulItem(item string) bool {
 		return false
 	}
 	return true
+}
+
+// InformItems delivers FYI updates (INFORM outcomes) as a SINGLE notification,
+// never as approvals — payment/receipt confirmations, status updates, "they'll
+// get back to us". This is what keeps the approvals inbox for genuine decisions
+// only. No-op when there's nothing to report.
+func InformItems(k loopkit.Kit, title string, items []string) {
+	var clean []string
+	for _, it := range items {
+		if it = strings.TrimSpace(it); it != "" {
+			clean = append(clean, it)
+		}
+	}
+	if len(clean) == 0 {
+		return
+	}
+	_ = k.Notify(title, "• "+strings.Join(clean, "\n• "))
 }
 
 // ProposeItems files one pending APPROVAL per APPROVE item a loop surfaced
