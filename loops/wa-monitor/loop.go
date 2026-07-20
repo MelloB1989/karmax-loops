@@ -67,9 +67,15 @@ func run(ctx context.Context, k loopkit.Kit) error {
 	// was directly addressed — the model was unreliable at noticing it.
 	mentioned := isOperatorMentioned(content, operator)
 
+	// A "reply group" is a trusted working group (e.g. a client project group)
+	// the operator wants KARMAX to act in AS them — reply-happy even without an
+	// @-mention. Configured via KARMAX_LOOP_WA_MONITOR_REPLY_GROUPS (comma-sep
+	// JIDs); nothing hardcoded. Real decisions still become approvals.
+	replyGroup := isGroup && isReplyGroup(chatID, k)
+
 	// Skip trivial acks (save tokens) and non-chat events — but NEVER skip a
-	// message that directly @-mentions the operator, even if it's short.
-	if karmaxChannelID == "" || (!mentioned && isTrivial(content)) {
+	// message that @-mentions the operator or lands in a reply group.
+	if karmaxChannelID == "" || (!mentioned && !replyGroup && isTrivial(content)) {
 		return nil
 	}
 
@@ -94,10 +100,10 @@ func run(ctx context.Context, k loopkit.Kit) error {
 	}
 
 	// addressed = someone is talking TO the operator and expects a response
-	// (any DM message, or a group message that @-mentions them). These must
-	// never end in silence: either the harness replies, or the loop sends the
-	// assistant away-note below.
-	addressed := !isGroup || mentioned
+	// (any DM, a group @-mention, or a trusted reply-group where the operator
+	// acts as themselves). These must never end in silence: either the harness
+	// replies, or the loop sends the assistant away-note below.
+	addressed := !isGroup || mentioned || replyGroup
 
 	context_ := "A monitored 1:1 chat just messaged " + operatorDesc + "."
 	policy := "   - LEAN TOWARD REPLYING. If a reply/action is routine and you're reasonably sure how the operator would respond (acknowledgements, answering things you know from context, simple scheduling, sharing already-known info, confirming availability, a natural conversational reply), SEND IT NOW: `" + wacli + " send --to " + chatID + " --text \"...\"` in the operator's natural human voice (concise; never say you're an AI/assistant when speaking AS the operator). Use the `gws` CLI for calendar/email if clearly asked. When in doubt between replying and staying silent, REPLY.\n" +
@@ -112,6 +118,13 @@ func run(ctx context.Context, k loopkit.Kit) error {
 			"   - LEAN TOWARD REPLYING in the operator's voice (a question you can answer, an acknowledgement, availability, a follow-up): reply NOW via `" + wacli + " send --to " + chatID + " --text \"...\"` (concise, human, never reveal you're an AI when speaking AS the operator).\n" +
 			"   - Flag APPROVE (with your suggested reply) only for a real DECISION, commitment, money, or something genuinely sensitive. Do NOT send a \"he's away\" placeholder yourself — the system acknowledges the sender automatically when you flag.\n" +
 			"   - Only if it's something ONLY the operator can personally do: flag REMIND. A plain mention with a question defaults to a reply.\n"
+	} else if replyGroup {
+		// Trusted working group: the operator wants KARMAX to act as them here,
+		// like a small client/project group where a reply is expected.
+		context_ = "A monitored TRUSTED WORKING GROUP just had a new message. " + operatorDesc + " actively participates here as themselves and WANTS you to reply on their behalf — treat it like a 1:1 with the operator's team."
+		policy = "   - LEAN TOWARD REPLYING as the operator. For routine/known things — acknowledging an update, answering something you know, confirming availability/next steps, a natural conversational reply to a teammate/client — SEND IT NOW: `" + wacli + " send --to " + chatID + " --text \"...\"` in the operator's natural voice (concise, human, never reveal you're an AI when speaking AS the operator). When in doubt between replying and staying silent, REPLY.\n" +
+			"   - Flag APPROVE (with your suggested reply) only for a real DECISION, commitment, money, pricing, scope, or anything genuinely sensitive where a wrong reply is costly. Don't send a placeholder yourself — the system acknowledges the sender when you flag.\n" +
+			"   - Ignore messages clearly aimed at another specific member and not the operator's side. Only truly irrelevant chatter is SKIP.\n"
 	} else if isGroup {
 		context_ = "A monitored GROUP chat just had a new message. " + operatorDesc + " is a member but was NOT @-mentioned."
 		policy = "   - This is a GROUP and the operator was NOT directly @-mentioned. Only SEND a reply if the operator is clearly being asked a question they must answer. Reply via `" + wacli + " send --to " + chatID + " --text \"...\"` in the operator's casual voice, and only for genuinely routine/known answers.\n" +
@@ -298,6 +311,36 @@ func report(k loopkit.Kit, who, outcome string) string {
 		k.Logf("wa-monitor: UNPARSEABLE outcome for %s — %s", who, truncate(outcome, 160))
 		return "unknown"
 	}
+}
+
+// isReplyGroup reports whether chatID is a configured trusted "reply group"
+// (KARMAX_LOOP_WA_MONITOR_REPLY_GROUPS, comma-separated JIDs) — a group where
+// KARMAX replies as the operator without needing an @-mention. Matching is on
+// the JID's local part so "120…@g.us" and a bare "120…" both work.
+func isReplyGroup(chatID string, k loopkit.Kit) bool {
+	raw := strings.TrimSpace(k.Config("reply_groups"))
+	if raw == "" {
+		return false
+	}
+	target := groupKey(chatID)
+	if target == "" {
+		return false
+	}
+	for _, part := range strings.Split(raw, ",") {
+		if groupKey(strings.TrimSpace(part)) == target {
+			return true
+		}
+	}
+	return false
+}
+
+// groupKey returns the local (pre-@) part of a JID, lowercased.
+func groupKey(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	if i := strings.IndexByte(s, '@'); i >= 0 {
+		s = s[:i]
+	}
+	return s
 }
 
 // isOperatorMentioned reports whether the operator's own WhatsApp number was
