@@ -54,6 +54,12 @@ func run(ctx context.Context, k loopkit.Kit) error {
 		senderName, _ = t.Payload["chat_name"].(string)
 	}
 	isGroup, _ := t.Payload["is_group"].(bool)
+	// Generic "KARMAX is being directly addressed" signals computed by wacli from
+	// its OWN identity (no configured numbers): the bot was @-mentioned, or this
+	// message is a reply to something the bot sent. The quoted text is already in
+	// `content` as "[replying to: …]".
+	mentionsMe, _ := t.Payload["mentions_me"].(bool)
+	quotedReplyToMe, _ := t.Payload["quoted_is_from_me"].(bool)
 
 	// Only third-party (non-operator) chats are proxied. Unknown/empty chat ids
 	// default to OPERATOR so we never accidentally auto-proxy — mirroring the
@@ -77,7 +83,9 @@ func run(ctx context.Context, k loopkit.Kit) error {
 	// a monitored chat — a direct "KARMAX, do this" instruction to carry out and
 	// post the result here. Bot ids come from KARMAX_LOOP_WA_MONITOR_BOT_MENTIONS
 	// (comma-sep phone/LID digits); nothing hardcoded.
-	commanded := isBotMentioned(content, k)
+	// Direct engagement with KARMAX — generic signals first (wacli-provided),
+	// then the optional configured bot-mention list as a fallback.
+	commanded := mentionsMe || quotedReplyToMe || isBotMentioned(content, k)
 
 	// Skip trivial acks (save tokens) and non-chat events — but NEVER skip a
 	// message that @-mentions the operator/KARMAX or lands in a reply group.
@@ -117,12 +125,14 @@ func run(ctx context.Context, k loopkit.Kit) error {
 		"   - If it's something ONLY the operator can personally do (send a document/file you don't have, a personal reply, an offline task): flag it as REMIND.\n" +
 		"   - SKIP is ONLY for messages that need no response at all (chatter, FYIs, spam). If the sender expects ANY response, never SKIP — reply or flag it.\n"
 	if commanded {
-		// The operator @-mentioned KARMAX itself: a direct instruction to carry
-		// out, not a message to reply to on their behalf. Highest priority.
-		context_ = "The operator has DIRECTLY INSTRUCTED YOU (KARMAX) by @-mentioning you in this chat. This is a command to carry out on their behalf, not a message to reply to socially."
-		policy = "   - This is a DIRECT COMMAND from the operator to YOU. Carry it out FULLY using your tools/shell (research the web, run commands, use gws/gh, generate the answer) — do the actual work, don't just acknowledge.\n" +
-			"   - Then POST the result in THIS chat via `" + wacli + " send --to " + chatID + " --text \"...\"` (send media with `--media <path>` if a file is asked for). Deliver what they asked for, cleanly formatted, in the operator's voice — the group can see you were asked, so a helpful answer is expected.\n" +
-			"   - Report ACTED with what you did/sent. Only flag APPROVE if the command itself would spend money / post something risky publicly / delete data — otherwise DO IT. Never SKIP a direct command.\n"
+		// KARMAX is being DIRECTLY engaged — @-mentioned, or someone replied to a
+		// message KARMAX sent (the quoted text is inline as "[replying to: …]").
+		// Highest priority: always respond, reading the full quoted context.
+		context_ = "You (KARMAX) are being DIRECTLY ENGAGED here — either @-mentioned, or someone replied to a message YOU sent. If it's a reply, the message you sent is shown inline as \"[replying to: …]\"; read BOTH it and the new message so you have the full thread. A response is ALWAYS expected — never ignore this."
+		policy = "   - Read the FULL context: the new message AND, for a reply, the quoted text it is responding to.\n" +
+			"   - If it's an instruction/request/question you can handle (find something, do X, send Y, answer a question) — CARRY IT OUT FULLY using your tools/shell (research the web, run commands, use gws/gh, generate the answer), then POST the result in THIS chat via `" + wacli + " send --to " + chatID + " --text \"...\"` (use `--media <path>` if a file is wanted). Do the actual work, don't just acknowledge.\n" +
+			"   - If it's a conversational reply or follow-up to what you said (a correction, a 'yes do it', a reaction), respond naturally HERE in the operator's voice to continue the thread.\n" +
+			"   - Report ACTED with what you did/sent. Never SKIP a direct engagement. Only flag APPROVE if fulfilling it would spend money, post something risky publicly, or delete data.\n"
 	} else if isGroup && mentioned {
 		// The operator was DIRECTLY @-mentioned — they are unambiguously being
 		// addressed. A mention must never be silently ignored.
