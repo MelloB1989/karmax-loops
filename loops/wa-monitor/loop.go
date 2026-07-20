@@ -73,9 +73,15 @@ func run(ctx context.Context, k loopkit.Kit) error {
 	// JIDs); nothing hardcoded. Real decisions still become approvals.
 	replyGroup := isGroup && isReplyGroup(chatID, k)
 
+	// commanded = the operator @-mentioned KARMAX's OWN number/LID (the bot) in
+	// a monitored chat — a direct "KARMAX, do this" instruction to carry out and
+	// post the result here. Bot ids come from KARMAX_LOOP_WA_MONITOR_BOT_MENTIONS
+	// (comma-sep phone/LID digits); nothing hardcoded.
+	commanded := isBotMentioned(content, k)
+
 	// Skip trivial acks (save tokens) and non-chat events — but NEVER skip a
-	// message that @-mentions the operator or lands in a reply group.
-	if karmaxChannelID == "" || (!mentioned && !replyGroup && isTrivial(content)) {
+	// message that @-mentions the operator/KARMAX or lands in a reply group.
+	if karmaxChannelID == "" || (!mentioned && !replyGroup && !commanded && isTrivial(content)) {
 		return nil
 	}
 
@@ -103,14 +109,21 @@ func run(ctx context.Context, k loopkit.Kit) error {
 	// (any DM, a group @-mention, or a trusted reply-group where the operator
 	// acts as themselves). These must never end in silence: either the harness
 	// replies, or the loop sends the assistant away-note below.
-	addressed := !isGroup || mentioned || replyGroup
+	addressed := !isGroup || mentioned || replyGroup || commanded
 
 	context_ := "A monitored 1:1 chat just messaged " + operatorDesc + "."
 	policy := "   - LEAN TOWARD REPLYING. If a reply/action is routine and you're reasonably sure how the operator would respond (acknowledgements, answering things you know from context, simple scheduling, sharing already-known info, confirming availability, a natural conversational reply), SEND IT NOW: `" + wacli + " send --to " + chatID + " --text \"...\"` in the operator's natural human voice (concise; never say you're an AI/assistant when speaking AS the operator). Use the `gws` CLI for calendar/email if clearly asked. When in doubt between replying and staying silent, REPLY.\n" +
 		"   - Flag APPROVE only for a real DECISION, a commitment, money, or something genuinely sensitive where a wrong reply causes harm — include your suggested reply. Do NOT send anything yourself in that case, and do NOT send any \"he's away\" placeholder — the system automatically acknowledges the sender when you flag APPROVE or REMIND.\n" +
 		"   - If it's something ONLY the operator can personally do (send a document/file you don't have, a personal reply, an offline task): flag it as REMIND.\n" +
 		"   - SKIP is ONLY for messages that need no response at all (chatter, FYIs, spam). If the sender expects ANY response, never SKIP — reply or flag it.\n"
-	if isGroup && mentioned {
+	if commanded {
+		// The operator @-mentioned KARMAX itself: a direct instruction to carry
+		// out, not a message to reply to on their behalf. Highest priority.
+		context_ = "The operator has DIRECTLY INSTRUCTED YOU (KARMAX) by @-mentioning you in this chat. This is a command to carry out on their behalf, not a message to reply to socially."
+		policy = "   - This is a DIRECT COMMAND from the operator to YOU. Carry it out FULLY using your tools/shell (research the web, run commands, use gws/gh, generate the answer) — do the actual work, don't just acknowledge.\n" +
+			"   - Then POST the result in THIS chat via `" + wacli + " send --to " + chatID + " --text \"...\"` (send media with `--media <path>` if a file is asked for). Deliver what they asked for, cleanly formatted, in the operator's voice — the group can see you were asked, so a helpful answer is expected.\n" +
+			"   - Report ACTED with what you did/sent. Only flag APPROVE if the command itself would spend money / post something risky publicly / delete data — otherwise DO IT. Never SKIP a direct command.\n"
+	} else if isGroup && mentioned {
 		// The operator was DIRECTLY @-mentioned — they are unambiguously being
 		// addressed. A mention must never be silently ignored.
 		context_ = "A monitored GROUP chat just @-MENTIONED " + operatorDesc + " directly — they are being addressed and a response is expected."
@@ -375,6 +388,39 @@ func isOperatorMentioned(content string, operator map[string]bool) bool {
 			continue
 		}
 		if strings.Contains(content, "@"+num) || strings.Contains(contentDigits, num) {
+			return true
+		}
+	}
+	return false
+}
+
+// isBotMentioned reports whether KARMAX's own number/LID was @-mentioned — the
+// operator (or anyone) explicitly summoning the bot to do something. Bot ids
+// come from KARMAX_LOOP_WA_MONITOR_BOT_MENTIONS (comma-separated phone/LID
+// digit strings — the account's number AND its group @lid, since WhatsApp
+// mentions in groups often use the LID). Matches the same way as an operator
+// mention (inline "@<digits>").
+func isBotMentioned(content string, k loopkit.Kit) bool {
+	raw := strings.TrimSpace(k.Config("bot_mentions"))
+	if raw == "" || !strings.Contains(content, "@") {
+		return false
+	}
+	var digits strings.Builder
+	for _, r := range content {
+		if r >= '0' && r <= '9' {
+			digits.WriteRune(r)
+		}
+	}
+	contentDigits := digits.String()
+	for _, id := range strings.Split(raw, ",") {
+		id = strings.TrimSpace(id)
+		if i := strings.IndexAny(id, "@:"); i >= 0 {
+			id = id[:i]
+		}
+		if len(id) < 6 {
+			continue
+		}
+		if strings.Contains(content, "@"+id) || strings.Contains(contentDigits, id) {
 			return true
 		}
 	}
