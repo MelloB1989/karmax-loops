@@ -21,6 +21,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/MelloB1989/karmax-loops/internal/shared"
@@ -40,6 +41,60 @@ func init() {
 // loop will send another one there — the flag/approval still happens every
 // time; only the sender-facing note is deduplicated.
 const awayNoteCooldown = 6 * time.Hour
+
+// ---- per-chat serialization -------------------------------------------------
+//
+// Every incoming message fires its own loop run. In a busy group several
+// messages land within seconds, so multiple runs used to execute CONCURRENTLY:
+// each independently read the same recent history, each decided the open
+// question still needed answering, and each sent its own reply — the operator
+// saw KARMAX answer the same thing two or three times seconds apart.
+//
+// Fix: at most ONE run per chat at a time. If a run is already in flight for
+// this chat, the new event doesn't spawn a second reply — it just marks the
+// chat dirty, and the in-flight run does exactly one more pass when it
+// finishes. That both removes duplicates and guarantees the late message is
+// still considered (the harness re-reads the thread, so it sees whatever was
+// already answered and skips it).
+type chatGate struct {
+	mu      sync.Mutex
+	running bool
+	pending bool
+}
+
+var chatGates sync.Map // chatID -> *chatGate
+
+func gateFor(chatID string) *chatGate {
+	g, _ := chatGates.LoadOrStore(chatID, &chatGate{})
+	return g.(*chatGate)
+}
+
+// acquire reports whether the caller may run now. If another run holds the
+// chat, it records that more work arrived and returns false.
+func (g *chatGate) acquire() bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.running {
+		g.pending = true
+		return false
+	}
+	g.running = true
+	g.pending = false
+	return true
+}
+
+// release ends this pass and reports whether new messages arrived meanwhile
+// (in which case the caller should make exactly one more pass).
+func (g *chatGate) release() bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.pending {
+		g.pending = false
+		return true // stay "running": we immediately do the follow-up pass
+	}
+	g.running = false
+	return false
+}
 
 func run(ctx context.Context, k loopkit.Kit) error {
 	t := k.Trigger()
@@ -113,117 +168,137 @@ func run(ctx context.Context, k loopkit.Kit) error {
 	if who == "" {
 		who = chatID
 	}
-	k.Logf("wa-monitor: proxying message in %q (group=%v, mentioned=%v)", who, isGroup, mentioned)
-
-	wacli := strings.TrimSpace(k.Config("wacli"))
-	if wacli == "" {
-		wacli = k.HostTool("wacli")
+	// One pass at a time per chat: if another run already holds this chat, fold
+	// this message into it instead of composing a second, duplicate reply.
+	gate := gateFor(chatID)
+	if !gate.acquire() {
+		k.Logf("wa-monitor: already replying in %q — folded this message into the in-flight pass", who)
+		return nil
 	}
 
-	operatorDesc := "the operator"
-	if len(operator) > 0 {
-		ids := make([]string, 0, len(operator))
-		for id := range operator {
-			ids = append(ids, id)
+	doPass := func() error {
+		k.Logf("wa-monitor: proxying message in %q (group=%v, mentioned=%v)", who, isGroup, mentioned)
+
+		wacli := strings.TrimSpace(k.Config("wacli"))
+		if wacli == "" {
+			wacli = k.HostTool("wacli")
 		}
-		operatorDesc = "the operator (their own numbers/JIDs: " + strings.Join(ids, ", ") + ")"
-	}
 
-	// addressed = someone is talking TO the operator and expects a response
-	// (any DM, a group @-mention, or a trusted reply-group where the operator
-	// acts as themselves). These must never end in silence: either the harness
-	// replies, or the loop sends the assistant away-note below.
-	addressed := !isGroup || mentioned || replyGroup || commanded
+		operatorDesc := "the operator"
+		if len(operator) > 0 {
+			ids := make([]string, 0, len(operator))
+			for id := range operator {
+				ids = append(ids, id)
+			}
+			operatorDesc = "the operator (their own numbers/JIDs: " + strings.Join(ids, ", ") + ")"
+		}
 
-	context_ := "A monitored 1:1 chat just messaged " + operatorDesc + "."
-	policy := "   - LEAN TOWARD REPLYING. If a reply/action is routine and you're reasonably sure how the operator would respond (acknowledgements, answering things you know from context, simple scheduling, sharing already-known info, confirming availability, a natural conversational reply), SEND IT NOW: `" + wacli + " send --to " + chatID + " --text \"...\"` in the operator's natural human voice (concise; never say you're an AI/assistant when speaking AS the operator). Use the `gws` CLI for calendar/email if clearly asked. When in doubt between replying and staying silent, REPLY.\n" +
-		"   - Flag APPROVE only for a real DECISION, a commitment, money, or something genuinely sensitive where a wrong reply causes harm — include your suggested reply. Do NOT send anything yourself in that case, and do NOT send any \"he's away\" placeholder — the system automatically acknowledges the sender when you flag APPROVE or REMIND.\n" +
-		"   - If it's something ONLY the operator can personally do (send a document/file you don't have, a personal reply, an offline task): flag it as REMIND.\n" +
-		"   - SKIP is ONLY for messages that need no response at all (chatter, FYIs, spam). If the sender expects ANY response, never SKIP — reply or flag it.\n"
-	if commanded {
-		// KARMAX is being DIRECTLY engaged — @-mentioned, or someone replied to a
-		// message KARMAX sent (the quoted text is inline as "[replying to: …]").
-		// Highest priority: always respond, reading the full quoted context.
-		context_ = "You (KARMAX) are being DIRECTLY ENGAGED here — either @-mentioned, or someone replied to a message YOU sent. If it's a reply, the message you sent is shown inline as \"[replying to: …]\"; read BOTH it and the new message so you have the full thread. A response is ALWAYS expected — never ignore this."
-		policy = "   - Read the FULL context: the new message AND, for a reply, the quoted text it is responding to.\n" +
-			"   - If it's an instruction/request/question you can handle (find something, do X, send Y, answer a question) — CARRY IT OUT FULLY using your tools/shell (research the web, run commands, use gws/gh, generate the answer), then POST the result in THIS chat via `" + wacli + " send --to " + chatID + " --text \"...\"` (use `--media <path>` if a file is wanted). Do the actual work, don't just acknowledge.\n" +
-			"   - If it's a conversational reply or follow-up to what you said (a correction, a 'yes do it', a reaction), respond naturally HERE in the operator's voice to continue the thread.\n" +
-			"   - Report ACTED with what you did/sent. Never SKIP a direct engagement. Only flag APPROVE if fulfilling it would spend money, post something risky publicly, or delete data.\n"
-	} else if isGroup && mentioned {
-		// The operator was DIRECTLY @-mentioned — they are unambiguously being
-		// addressed. A mention must never be silently ignored.
-		context_ = "A monitored GROUP chat just @-MENTIONED " + operatorDesc + " directly — they are being addressed and a response is expected."
-		policy = "   - The operator was DIRECTLY @-mentioned, so you MUST respond somehow — never SKIP this.\n" +
-			"   - LEAN TOWARD REPLYING in the operator's voice (a question you can answer, an acknowledgement, availability, a follow-up): reply NOW via `" + wacli + " send --to " + chatID + " --text \"...\"` (concise, human, never reveal you're an AI when speaking AS the operator).\n" +
-			"   - Flag APPROVE (with your suggested reply) only for a real DECISION, commitment, money, or something genuinely sensitive. Do NOT send a \"he's away\" placeholder yourself — the system acknowledges the sender automatically when you flag.\n" +
-			"   - Only if it's something ONLY the operator can personally do: flag REMIND. A plain mention with a question defaults to a reply.\n"
-	} else if replyGroup {
-		// Trusted working group: the operator wants KARMAX to act as them here,
-		// like a small client/project group where a reply is expected.
-		context_ = "A monitored TRUSTED WORKING GROUP just had a new message. " + operatorDesc + " actively participates here as themselves and WANTS you to reply on their behalf — treat it like a 1:1 with the operator's team."
-		policy = "   - LEAN TOWARD REPLYING as the operator. For routine/known things — acknowledging an update, answering something you know, confirming availability/next steps, a natural conversational reply to a teammate/client — SEND IT NOW: `" + wacli + " send --to " + chatID + " --text \"...\"` in the operator's natural voice (concise, human, never reveal you're an AI when speaking AS the operator). When in doubt between replying and staying silent, REPLY.\n" +
-			"   - Flag APPROVE (with your suggested reply) only for a real DECISION, commitment, money, pricing, scope, or anything genuinely sensitive where a wrong reply is costly. Don't send a placeholder yourself — the system acknowledges the sender when you flag.\n" +
-			"   - Ignore messages clearly aimed at another specific member and not the operator's side. Only truly irrelevant chatter is SKIP.\n"
-	} else if isGroup {
-		context_ = "A monitored GROUP chat just had a new message. " + operatorDesc + " is a member but was NOT @-mentioned."
-		policy = "   - This is a GROUP and the operator was NOT directly @-mentioned. Only SEND a reply if the operator is clearly being asked a question they must answer. Reply via `" + wacli + " send --to " + chatID + " --text \"...\"` in the operator's casual voice, and only for genuinely routine/known answers.\n" +
-			"   - Do NOT reply to general group discussion or messages meant for other members.\n" +
-			"   - If the message is a meaningful update on an active project/deal/commitment (e.g. a client saying they'll get back, a payment confirmation, a deadline) but needs no reply or decision, use INFORM so the operator gets a notification — do NOT file it as an APPROVE (that inbox is for real decisions only), and do not silently skip important client/deal activity.\n" +
-			"   - Reserve APPROVE for a genuine decision the operator must make (spend/pricing/scope/commitment/sensitive).\n" +
-			"   - Only truly irrelevant chatter is SKIP.\n"
-	}
+		// addressed = someone is talking TO the operator and expects a response
+		// (any DM, a group @-mention, or a trusted reply-group where the operator
+		// acts as themselves). These must never end in silence: either the harness
+		// replies, or the loop sends the assistant away-note below.
+		addressed := !isGroup || mentioned || replyGroup || commanded
 
-	prompt := "You are the proactive WhatsApp assistant managing the operator's WhatsApp account via the wacli CLI. " + context_ + "\n\n" +
-		"Chat: " + who + "\n" +
-		"Chat id: " + chatID + "\n" +
-		"Latest message: " + content + "\n\n" +
-		"Steps:\n" +
-		"1. Read recent context: run `" + wacli + " messages --chat " + chatID + " --limit 15` (newest last). If it's already handled/answered and nothing new is needed, do nothing.\n" +
-		"2. Decide on the operator's behalf:\n" + policy +
-		"3. REQUIRED: end your response with EXACTLY one outcome line — the VERY LAST line, beginning with one of these verbs (mandatory even if you already replied or acted; if you omit it the message is treated as unhandled and escalated). Choose CAREFULLY — do NOT use APPROVE for things you can handle yourself or for pure updates:\n" +
-		"   ACTED: <what you sent/did on the operator's behalf — prefer this for anything routine>\n" +
-		"   APPROVE: <ONLY a real decision the operator must personally make — approving spend/pricing/scope, a commitment, something risky/irreversible/sensitive — plus your suggested reply. If you could handle it, ACT. If it just needs them to know, INFORM.>\n" +
-		"   REMIND: <something ONLY the operator can personally do> | due: <ISO-8601 with timezone; omit '| due:' if no concrete deadline>\n" +
-		"   INFORM: <an update the operator should simply KNOW — a payment/receipt confirmation, a status update, 'they'll get back to us', a doc received — needs NO decision and NO reply. Becomes a notification, not an approval.>\n" +
-		"   SKIP: <nothing worth surfacing — chatter, noise, already handled>"
+		context_ := "A monitored 1:1 chat just messaged " + operatorDesc + "."
+		policy := "   - LEAN TOWARD REPLYING. If a reply/action is routine and you're reasonably sure how the operator would respond (acknowledgements, answering things you know from context, simple scheduling, sharing already-known info, confirming availability, a natural conversational reply), SEND IT NOW: `" + wacli + " send --to " + chatID + " --text \"...\"` in the operator's natural human voice (concise; never say you're an AI/assistant when speaking AS the operator). Use the `gws` CLI for calendar/email if clearly asked. When in doubt between replying and staying silent, REPLY.\n" +
+			"   - Flag APPROVE only for a real DECISION, a commitment, money, or something genuinely sensitive where a wrong reply causes harm — include your suggested reply. Do NOT send anything yourself in that case, and do NOT send any \"he's away\" placeholder — the system automatically acknowledges the sender when you flag APPROVE or REMIND.\n" +
+			"   - If it's something ONLY the operator can personally do (send a document/file you don't have, a personal reply, an offline task): flag it as REMIND.\n" +
+			"   - SKIP is ONLY for messages that need no response at all (chatter, FYIs, spam). If the sender expects ANY response, never SKIP — reply or flag it.\n"
+		if commanded {
+			// KARMAX is being DIRECTLY engaged — @-mentioned, or someone replied to a
+			// message KARMAX sent (the quoted text is inline as "[replying to: …]").
+			// Highest priority: always respond, reading the full quoted context.
+			context_ = "You (KARMAX) are being DIRECTLY ENGAGED here — either @-mentioned, or someone replied to a message YOU sent. If it's a reply, the message you sent is shown inline as \"[replying to: …]\"; read BOTH it and the new message so you have the full thread. A response is ALWAYS expected — never ignore this."
+			policy = "   - Read the FULL context: the new message AND, for a reply, the quoted text it is responding to.\n" +
+				"   - If it's an instruction/request/question you can handle (find something, do X, send Y, answer a question) — CARRY IT OUT FULLY using your tools/shell (research the web, run commands, use gws/gh, generate the answer), then POST the result in THIS chat via `" + wacli + " send --to " + chatID + " --text \"...\"` (use `--media <path>` if a file is wanted). Do the actual work, don't just acknowledge.\n" +
+				"   - If it's a conversational reply or follow-up to what you said (a correction, a 'yes do it', a reaction), respond naturally HERE in the operator's voice to continue the thread.\n" +
+				"   - Report ACTED with what you did/sent. Never SKIP a direct engagement. Only flag APPROVE if fulfilling it would spend money, post something risky publicly, or delete data.\n"
+		} else if isGroup && mentioned {
+			// The operator was DIRECTLY @-mentioned — they are unambiguously being
+			// addressed. A mention must never be silently ignored.
+			context_ = "A monitored GROUP chat just @-MENTIONED " + operatorDesc + " directly — they are being addressed and a response is expected."
+			policy = "   - The operator was DIRECTLY @-mentioned, so you MUST respond somehow — never SKIP this.\n" +
+				"   - LEAN TOWARD REPLYING in the operator's voice (a question you can answer, an acknowledgement, availability, a follow-up): reply NOW via `" + wacli + " send --to " + chatID + " --text \"...\"` (concise, human, never reveal you're an AI when speaking AS the operator).\n" +
+				"   - Flag APPROVE (with your suggested reply) only for a real DECISION, commitment, money, or something genuinely sensitive. Do NOT send a \"he's away\" placeholder yourself — the system acknowledges the sender automatically when you flag.\n" +
+				"   - Only if it's something ONLY the operator can personally do: flag REMIND. A plain mention with a question defaults to a reply.\n"
+		} else if replyGroup {
+			// Trusted working group: the operator wants KARMAX to act as them here,
+			// like a small client/project group where a reply is expected.
+			context_ = "A monitored TRUSTED WORKING GROUP just had a new message. " + operatorDesc + " actively participates here as themselves and WANTS you to reply on their behalf — treat it like a 1:1 with the operator's team."
+			policy = "   - LEAN TOWARD REPLYING as the operator. For routine/known things — acknowledging an update, answering something you know, confirming availability/next steps, a natural conversational reply to a teammate/client — SEND IT NOW: `" + wacli + " send --to " + chatID + " --text \"...\"` in the operator's natural voice (concise, human, never reveal you're an AI when speaking AS the operator). When in doubt between replying and staying silent, REPLY.\n" +
+				"   - Flag APPROVE (with your suggested reply) only for a real DECISION, commitment, money, pricing, scope, or anything genuinely sensitive where a wrong reply is costly. Don't send a placeholder yourself — the system acknowledges the sender when you flag.\n" +
+				"   - Ignore messages clearly aimed at another specific member and not the operator's side. Only truly irrelevant chatter is SKIP.\n"
+		} else if isGroup {
+			context_ = "A monitored GROUP chat just had a new message. " + operatorDesc + " is a member but was NOT @-mentioned."
+			policy = "   - This is a GROUP and the operator was NOT directly @-mentioned. Only SEND a reply if the operator is clearly being asked a question they must answer. Reply via `" + wacli + " send --to " + chatID + " --text \"...\"` in the operator's casual voice, and only for genuinely routine/known answers.\n" +
+				"   - Do NOT reply to general group discussion or messages meant for other members.\n" +
+				"   - If the message is a meaningful update on an active project/deal/commitment (e.g. a client saying they'll get back, a payment confirmation, a deadline) but needs no reply or decision, use INFORM so the operator gets a notification — do NOT file it as an APPROVE (that inbox is for real decisions only), and do not silently skip important client/deal activity.\n" +
+				"   - Reserve APPROVE for a genuine decision the operator must make (spend/pricing/scope/commitment/sensitive).\n" +
+				"   - Only truly irrelevant chatter is SKIP.\n"
+		}
 
-	out, err := k.Harness(ctx, prompt)
-	if err != nil || shared.LooksLikeError(out) {
-		// Never fail silently: the operator must know a monitored message went
-		// unhandled (especially while they sleep) — and the SENDER shouldn't be
-		// left hanging either.
-		k.Logf("wa-monitor: harness failed for %s: %v %.120s", who, err, out)
-		_ = k.Notify("⚠️ Couldn't handle — "+who,
-			"A monitored message needs you (assistant failed): "+truncate(content, 200))
-		if addressed {
+		prompt := "You are the proactive WhatsApp assistant managing the operator's WhatsApp account via the wacli CLI. " + context_ + "\n\n" +
+			"Chat: " + who + "\n" +
+			"Chat id: " + chatID + "\n" +
+			"Latest message: " + content + "\n\n" +
+			"Steps:\n" +
+			"1. Read recent context: run `" + wacli + " messages --chat " + chatID + " --limit 15` (newest last). If it's already handled/answered and nothing new is needed, do nothing.\n" +
+			"2. Decide on the operator's behalf:\n" + policy +
+			"3. REQUIRED: end your response with EXACTLY one outcome line — the VERY LAST line, beginning with one of these verbs (mandatory even if you already replied or acted; if you omit it the message is treated as unhandled and escalated). Choose CAREFULLY — do NOT use APPROVE for things you can handle yourself or for pure updates:\n" +
+			"   ACTED: <what you sent/did on the operator's behalf — prefer this for anything routine>\n" +
+			"   APPROVE: <ONLY a real decision the operator must personally make — approving spend/pricing/scope, a commitment, something risky/irreversible/sensitive — plus your suggested reply. If you could handle it, ACT. If it just needs them to know, INFORM.>\n" +
+			"   REMIND: <something ONLY the operator can personally do> | due: <ISO-8601 with timezone; omit '| due:' if no concrete deadline>\n" +
+			"   INFORM: <an update the operator should simply KNOW — a payment/receipt confirmation, a status update, 'they'll get back to us', a doc received — needs NO decision and NO reply. Becomes a notification, not an approval.>\n" +
+			"   SKIP: <nothing worth surfacing — chatter, noise, already handled>"
+
+		out, err := k.Harness(ctx, prompt)
+		if err != nil || shared.LooksLikeError(out) {
+			// Never fail silently: the operator must know a monitored message went
+			// unhandled (especially while they sleep) — and the SENDER shouldn't be
+			// left hanging either.
+			k.Logf("wa-monitor: harness failed for %s: %v %.120s", who, err, out)
+			_ = k.Notify("⚠️ Couldn't handle — "+who,
+				"A monitored message needs you (assistant failed): "+truncate(content, 200))
+			if addressed {
+				sendAwayNote(ctx, k, chatID, who, content, isGroup)
+			}
+			return nil
+		}
+		outcome := lastLine(out)
+		kind := report(k, who, outcome)
+
+		// A monitored message must NEVER silently vanish. If the harness produced no
+		// clean outcome (empty) or unrecognized prose (unknown) — e.g. it read the
+		// chat but didn't declare a decision — surface it to the operator instead of
+		// dropping it. This is the "Siva replied but KARMAX did nothing" gap.
+		if kind == "empty" || kind == "unknown" {
+			_ = k.Notify("👀 Needs a look — "+who,
+				"I saw a message in a monitored chat but couldn't cleanly decide what to do — take a look:\n"+truncate(content, 300))
+			if addressed {
+				sendAwayNote(ctx, k, chatID, who, content, isGroup)
+			}
+			return nil
+		}
+
+		// The harness flagged instead of replying (APPROVE/REMIND) while the sender
+		// was talking TO the operator — acknowledge them as the assistant so the
+		// message never just hangs. The TRIGGER is deterministic (Go decides an
+		// acknowledgement must happen, rate-limited); the WORDING is the LLM's.
+		if addressed && (kind == "approve" || kind == "remind") {
 			sendAwayNote(ctx, k, chatID, who, content, isGroup)
 		}
 		return nil
 	}
-	outcome := lastLine(out)
-	kind := report(k, who, outcome)
 
-	// A monitored message must NEVER silently vanish. If the harness produced no
-	// clean outcome (empty) or unrecognized prose (unknown) — e.g. it read the
-	// chat but didn't declare a decision — surface it to the operator instead of
-	// dropping it. This is the "Siva replied but KARMAX did nothing" gap.
-	if kind == "empty" || kind == "unknown" {
-		_ = k.Notify("👀 Needs a look — "+who,
-			"I saw a message in a monitored chat but couldn't cleanly decide what to do — take a look:\n"+truncate(content, 300))
-		if addressed {
-			sendAwayNote(ctx, k, chatID, who, content, isGroup)
+	// Run, then make exactly one more pass if messages arrived while we worked
+	// (the harness re-reads the thread, so it skips anything already answered).
+	for {
+		err := doPass()
+		if !gate.release() {
+			return err
 		}
-		return nil
+		k.Logf("wa-monitor: new messages arrived in %q while replying — one more pass", who)
 	}
-
-	// The harness flagged instead of replying (APPROVE/REMIND) while the sender
-	// was talking TO the operator — acknowledge them as the assistant so the
-	// message never just hangs. The TRIGGER is deterministic (Go decides an
-	// acknowledgement must happen, rate-limited); the WORDING is the LLM's.
-	if addressed && (kind == "approve" || kind == "remind") {
-		sendAwayNote(ctx, k, chatID, who, content, isGroup)
-	}
-	return nil
 }
 
 // sendAwayNote tells the sender the operator is away and KARMAX has notified
