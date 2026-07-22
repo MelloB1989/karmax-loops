@@ -17,6 +17,7 @@ package wamonitor
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -266,7 +267,72 @@ func run(ctx context.Context, k loopkit.Kit) error {
 			"   INFORM: <an update the operator should simply KNOW — a payment/receipt confirmation, a status update, 'they'll get back to us', a doc received — needs NO decision and NO reply. Becomes a notification, not an approval.>\n" +
 			"   SKIP: <nothing worth surfacing — chatter, noise, already handled>"
 
-		out, err := k.Harness(ctx, prompt)
+		// ---- GATEWAY FIRST -------------------------------------------------
+		// Try one cheap main-model call before spawning a Claude Code run. The
+		// gateway has NO tools, so it either writes the reply itself, routes the
+		// message, or asks to escalate. Claude Code is the exception, not the
+		// default: it used to run for EVERY incoming message.
+		thread, _ := k.ReadWhatsApp(ctx, chatID, 15)
+		gwPrompt := "You are the operator's WhatsApp assistant. " + context_ + "\n\n" +
+			"Chat: " + who + "\n" +
+			"Latest message: " + content + "\n\n" +
+			shortMem +
+			"Recent thread (oldest first):\n" + truncate(thread, 4000) + "\n\n" +
+			"How to decide (you have NO tools — you can only write text):\n" + policy + "\n" +
+			"Answer with ONE verb on the FIRST line, then its content:\n" +
+			"REPLY: <the exact message to send, in the operator's voice — use this whenever you can simply answer>\n" +
+			"ESCALATE: <why> — ONLY when it needs tools you don't have: web research, running commands, reading files/media, calendar/email actions, or looking something up you don't know.\n" +
+			"APPROVE: <a real decision the operator must make + your suggested reply>\n" +
+			"REMIND: <something only the operator can personally do> | due: <ISO-8601 or omit>\n" +
+			"INFORM: <an update they should just know; no reply needed>\n" +
+			"SKIP: <nothing worth doing>"
+
+		var out string
+		var err error
+		outcome := ""
+		escalate := true
+
+		if gwOut, gwErr := k.Gateway(ctx, gwPrompt); gwErr != nil {
+			k.Logf("wa-monitor: gateway call failed for %q (%v) — escalating to harness", who, gwErr)
+		} else if shared.LooksLikeError(gwOut) {
+			k.Logf("wa-monitor: gateway returned an error/refusal for %q — escalating", who)
+		} else {
+			verb, payload := parseGatewayOutcome(gwOut)
+			switch verb {
+			case "REPLY":
+				if strings.TrimSpace(payload) == "" {
+					k.Logf("wa-monitor: gateway REPLY was empty for %q — escalating", who)
+				} else if serr := sendViaWacli(ctx, k, chatID, payload, triggerMsgID); serr != nil {
+					k.Logf("wa-monitor: gateway reply send failed for %q (%v) — escalating", who, serr)
+				} else {
+					outcome = "ACTED: replied — " + oneLineTrunc(payload, 220)
+					escalate = false
+					k.Logf("wa-monitor: gateway handled %q without claude_code", who)
+				}
+			case "ESCALATE":
+				k.Logf("wa-monitor: gateway escalating %q — %s", who, oneLineTrunc(payload, 140))
+			case "APPROVE", "REMIND", "INFORM", "SKIP":
+				outcome = verb + ": " + oneLineTrunc(payload, 400)
+				escalate = false
+				k.Logf("wa-monitor: gateway routed %q as %s (no claude_code)", who, verb)
+			default:
+				k.Logf("wa-monitor: gateway gave no usable verb for %q — escalating", who)
+			}
+		}
+
+		if !escalate {
+			kind := report(k, who, outcome)
+			if kind == "acted" || kind == "inform" {
+				_ = k.ShortSet(chatID, "did_"+time.Now().UTC().Format("150405"), truncate(outcome, 300), shortMemoryTTL)
+			}
+			if addressed && (kind == "approve" || kind == "remind") {
+				sendAwayNote(ctx, k, chatID, who, content, isGroup)
+			}
+			return nil
+		}
+
+		// ---- ESCALATED: full Claude Code harness (tools/shell/research) ------
+		out, err = k.Harness(ctx, prompt)
 		if err != nil || shared.LooksLikeError(out) {
 			// Never fail silently: the operator must know a monitored message went
 			// unhandled (especially while they sleep) — and the SENDER shouldn't be
@@ -279,7 +345,7 @@ func run(ctx context.Context, k loopkit.Kit) error {
 			}
 			return nil
 		}
-		outcome := lastLine(out)
+		outcome = lastLine(out)
 		kind := report(k, who, outcome)
 
 		// Record what we just did in this chat's short-term memory (durable but
@@ -456,6 +522,49 @@ func report(k loopkit.Kit, who, outcome string) string {
 		k.Logf("wa-monitor: UNPARSEABLE outcome for %s — %s", who, truncate(outcome, 160))
 		return "unknown"
 	}
+}
+
+// parseGatewayOutcome pulls the leading verb and its payload out of a gateway
+// reply. The verb is on the first line; the payload is everything after it (so
+// a REPLY can span multiple lines). Returns ("","") when there's no known verb.
+func parseGatewayOutcome(out string) (verb, payload string) {
+	trimmed := strings.TrimSpace(out)
+	if trimmed == "" {
+		return "", ""
+	}
+	upper := strings.ToUpper(trimmed)
+	for _, v := range []string{"ESCALATE", "APPROVE", "REMIND", "INFORM", "REPLY", "SKIP"} {
+		if strings.HasPrefix(upper, v) {
+			rest := strings.TrimSpace(trimmed[len(v):])
+			rest = strings.TrimSpace(strings.TrimPrefix(rest, ":"))
+			return v, rest
+		}
+	}
+	return "", ""
+}
+
+// sendViaWacli posts a message through the local wacli HTTP API, quoting
+// replyToID when set so the reply threads under the message it answers. Used by
+// the gateway path, which composes the text itself instead of delegating the
+// send to a Claude Code run.
+func sendViaWacli(ctx context.Context, k loopkit.Kit, chatID, text, replyToID string) error {
+	payload := map[string]string{"to": chatID, "text": text}
+	if strings.TrimSpace(replyToID) != "" {
+		payload["reply_to"] = replyToID
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	resp, status, err := k.HTTP(ctx, "POST", k.HostTool("wacli-api")+"/send",
+		map[string]string{"Content-Type": "application/json"}, string(body))
+	if err != nil {
+		return err
+	}
+	if status < 200 || status > 299 {
+		return fmt.Errorf("wacli send: HTTP %d: %s", status, oneLineTrunc(resp, 160))
+	}
+	return nil
 }
 
 // shortMemoryTTL is how long this loop's per-chat scratch notes live. Long
