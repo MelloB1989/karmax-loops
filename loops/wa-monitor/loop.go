@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -278,7 +279,10 @@ func run(ctx context.Context, k loopkit.Kit) error {
 			"Latest message: " + content + "\n\n" +
 			shortMem +
 			"Recent thread (oldest first):\n" + truncate(thread, 4000) + "\n\n" +
-			"How to decide (you have NO tools — you can only write text):\n" + policy + "\n" +
+			"You have ONE tool: `wacli`, the operator's WhatsApp CLI. Use it to look things up before answering — e.g. read another conversation with\n" +
+			"  args: [\"messages\", \"--chat\", \"<name|phone|jid>\", \"--limit\", \"15\"]\n" +
+			"or resolve a person with args: [\"resolve\", \"<name>\"]. If someone asks what another chat said, LOOK IT UP instead of saying you can't see it.\n\n" +
+			"How to decide:\n" + policy + "\n" +
 			"Answer with ONE verb on the FIRST line, then its content:\n" +
 			"REPLY: <the exact message to send, in the operator's voice — use this whenever you can simply answer>\n" +
 			"ESCALATE: <why> — ONLY when it needs tools you don't have: web research, running commands, reading files/media, calendar/email actions, or looking something up you don't know.\n" +
@@ -292,7 +296,7 @@ func run(ctx context.Context, k loopkit.Kit) error {
 		outcome := ""
 		escalate := true
 
-		if gwOut, gwErr := k.Gateway(ctx, gwPrompt); gwErr != nil {
+		if gwOut, gwErr := k.Gateway(ctx, gwPrompt, wacliTool(wacli)); gwErr != nil {
 			k.Logf("wa-monitor: gateway call failed for %q (%v) — escalating to harness", who, gwErr)
 		} else if shared.LooksLikeError(gwOut) {
 			k.Logf("wa-monitor: gateway returned an error/refusal for %q — escalating", who)
@@ -768,4 +772,60 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n] + "…"
+}
+
+// wacliTool lends the gateway model the operator's WhatsApp CLI for one call.
+//
+// This is the pattern for making KARMAX capable without crowding its core: the
+// capability lives in the loop that needs it, is scoped to a single gateway
+// call, and never becomes a globally registered tool. It's what lets the
+// gateway answer "what did Siva say?" by actually reading that chat instead of
+// claiming it can't see other conversations.
+//
+// READ-ONLY on purpose: sending is the loop's job (it owns reply-to threading
+// and the outcome grammar), so the model can look things up but cannot message
+// anyone behind the loop's back.
+func wacliTool(wacliPath string) loopkit.Tool {
+	allowed := map[string]bool{
+		"messages": true, "chats": true, "resolve": true, "contacts": true, "receipts": true,
+	}
+	return loopkit.Tool{
+		Name: "wacli",
+		Description: "Run the operator's WhatsApp CLI to LOOK THINGS UP: read another chat " +
+			"(messages --chat <name|phone|jid> --limit N), list chats, resolve a name to a " +
+			"contact, or inspect contacts/receipts. Read-only — it cannot send messages.",
+		Schema: json.RawMessage(`{
+			"type": "object",
+			"properties": {
+				"args": {
+					"type": "array",
+					"items": {"type": "string"},
+					"description": "CLI arguments, e.g. [\"messages\",\"--chat\",\"Siva\",\"--limit\",\"15\"]"
+				}
+			},
+			"required": ["args"]
+		}`),
+		Run: func(ctx context.Context, in map[string]any) (string, error) {
+			raw, _ := in["args"].([]any)
+			args := make([]string, 0, len(raw))
+			for _, a := range raw {
+				if str, ok := a.(string); ok && strings.TrimSpace(str) != "" {
+					args = append(args, str)
+				}
+			}
+			if len(args) == 0 {
+				return "", fmt.Errorf("args is required, e.g. [\"messages\",\"--chat\",\"<name>\",\"--limit\",\"15\"]")
+			}
+			if !allowed[args[0]] {
+				return "", fmt.Errorf("subcommand %q is not permitted here (read-only: messages, chats, resolve, contacts, receipts)", args[0])
+			}
+			cctx, cancel := context.WithTimeout(ctx, 25*time.Second)
+			defer cancel()
+			out, err := exec.CommandContext(cctx, wacliPath, args...).CombinedOutput()
+			if err != nil {
+				return "", fmt.Errorf("wacli %s: %v: %s", args[0], err, oneLineTrunc(string(out), 200))
+			}
+			return truncate(string(out), 6000), nil
+		},
+	}
 }
