@@ -117,6 +117,7 @@ func run(ctx context.Context, k loopkit.Kit) error {
 	mentionsMe, _ := t.Payload["mentions_me"].(bool)
 	quotedReplyToMe, _ := t.Payload["quoted_is_from_me"].(bool)
 	mentionCount := payloadInt(t.Payload["mention_count"])
+	triggerMsgID, _ := t.Payload["wacli_message_id"].(string)
 
 	// Only third-party (non-operator) chats are proxied. Unknown/empty chat ids
 	// default to OPERATOR so we never accidentally auto-proxy — mirroring the
@@ -237,10 +238,24 @@ func run(ctx context.Context, k loopkit.Kit) error {
 				"   - Only truly irrelevant chatter is SKIP.\n"
 		}
 
+		// Per-chat SHORT-TERM MEMORY: what KARMAX already said/decided in THIS
+		// chat recently, rendered straight into the prompt so the harness has
+		// continuity and doesn't re-answer something it just handled.
+		shortMem := renderShortMemory(k, chatID)
+
+		// Let the harness quote the exact message that triggered this run, so
+		// the reply threads under it instead of floating at the end of the chat.
+		replyHint := ""
+		if strings.TrimSpace(triggerMsgID) != "" {
+			replyHint = "Reply id: " + triggerMsgID + " — answer by QUOTING this message: add `--reply-to " + triggerMsgID + "` to your wacli send so it threads under the message you're replying to.\n"
+		}
+
 		prompt := "You are the proactive WhatsApp assistant managing the operator's WhatsApp account via the wacli CLI. " + context_ + "\n\n" +
 			"Chat: " + who + "\n" +
 			"Chat id: " + chatID + "\n" +
+			replyHint +
 			"Latest message: " + content + "\n\n" +
+			shortMem +
 			"Steps:\n" +
 			"1. Read recent context: run `" + wacli + " messages --chat " + chatID + " --limit 15` (newest last). If it's already handled/answered and nothing new is needed, do nothing.\n" +
 			"2. Decide on the operator's behalf:\n" + policy +
@@ -266,6 +281,13 @@ func run(ctx context.Context, k loopkit.Kit) error {
 		}
 		outcome := lastLine(out)
 		kind := report(k, who, outcome)
+
+		// Record what we just did in this chat's short-term memory (durable but
+		// self-expiring), so the next message in the thread carries the context
+		// and KARMAX doesn't repeat itself.
+		if kind == "acted" || kind == "inform" {
+			_ = k.ShortSet(chatID, "did_"+time.Now().UTC().Format("150405"), truncate(outcome, 300), shortMemoryTTL)
+		}
 
 		// A monitored message must NEVER silently vanish. If the harness produced no
 		// clean outcome (empty) or unrecognized prose (unknown) — e.g. it read the
@@ -434,6 +456,39 @@ func report(k loopkit.Kit, who, outcome string) string {
 		k.Logf("wa-monitor: UNPARSEABLE outcome for %s — %s", who, truncate(outcome, 160))
 		return "unknown"
 	}
+}
+
+// shortMemoryTTL is how long this loop's per-chat scratch notes live. Long
+// enough to carry a conversation, short enough that stale context expires on
+// its own — the memory engine handles the expiry.
+const shortMemoryTTL = 12 * time.Hour
+
+// renderShortMemory formats this chat's short-term memory for the prompt. The
+// group is the chat id, so every conversation gets its own scratch space
+// (namespaced per-loop by the engine). Empty string when there's nothing yet.
+func renderShortMemory(k loopkit.Kit, chatID string) string {
+	entries, err := k.ShortAll(chatID)
+	if err != nil || len(entries) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString("What you already did/noted in THIS chat recently (short-term memory — don't repeat these):\n")
+	for i, e := range entries {
+		if i >= 8 {
+			break
+		}
+		sb.WriteString("- " + e.Key + ": " + oneLineTrunc(e.Value, 220) + "\n")
+	}
+	sb.WriteString("\n")
+	return sb.String()
+}
+
+func oneLineTrunc(s string, n int) string {
+	s = strings.TrimSpace(strings.ReplaceAll(s, "\n", " "))
+	if len(s) > n {
+		return s[:n] + "…"
+	}
+	return s
 }
 
 // payloadInt reads a numeric payload field (JSON round-trips make it float64).
