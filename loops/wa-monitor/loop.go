@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -60,6 +61,7 @@ func run(ctx context.Context, k loopkit.Kit) error {
 	// `content` as "[replying to: …]".
 	mentionsMe, _ := t.Payload["mentions_me"].(bool)
 	quotedReplyToMe, _ := t.Payload["quoted_is_from_me"].(bool)
+	mentionCount := payloadInt(t.Payload["mention_count"])
 
 	// Only third-party (non-operator) chats are proxied. Unknown/empty chat ids
 	// default to OPERATOR so we never accidentally auto-proxy — mirroring the
@@ -86,6 +88,20 @@ func run(ctx context.Context, k loopkit.Kit) error {
 	// Direct engagement with KARMAX — generic signals first (wacli-provided),
 	// then the optional configured bot-mention list as a fallback.
 	commanded := mentionsMe || quotedReplyToMe || isBotMentioned(content, k)
+
+	// RULE: being @-mentioned ALWAYS earns a response — in ANY group, whether or
+	// not that group is tracked. wacli delivers out-of-scope mentions so this
+	// loop gets the chance to decide.
+	//
+	// EXCEPTION: an "@all"/"@everyone"-style blast mentions every participant,
+	// so it sweeps KARMAX up with everyone else — that is not being addressed.
+	// In a group we DON'T track, ignore it (in tracked groups we still look,
+	// since those conversations are the operator's own). Threshold is
+	// configurable via KARMAX_LOOP_WA_MONITOR_MASS_MENTION_MIN.
+	if mentionsMe && isGroup && mentionCount >= massMentionMin(k) && !isTrackedChat(ctx, k, chatID) {
+		k.Logf("wa-monitor: ignoring @all-style mention (%d mentions) in untracked group %q", mentionCount, senderName)
+		return nil
+	}
 
 	// Skip trivial acks (save tokens) and non-chat events — but NEVER skip a
 	// message that @-mentions the operator/KARMAX or lands in a reply group.
@@ -343,6 +359,48 @@ func report(k loopkit.Kit, who, outcome string) string {
 		k.Logf("wa-monitor: UNPARSEABLE outcome for %s — %s", who, truncate(outcome, 160))
 		return "unknown"
 	}
+}
+
+// payloadInt reads a numeric payload field (JSON round-trips make it float64).
+func payloadInt(v any) int {
+	switch n := v.(type) {
+	case int:
+		return n
+	case int64:
+		return int(n)
+	case float64:
+		return int(n)
+	}
+	return 0
+}
+
+// massMentionMin is how many @-mentions in one message make it an
+// "@all"/"@everyone" blast rather than someone addressing KARMAX. Override with
+// KARMAX_LOOP_WA_MONITOR_MASS_MENTION_MIN.
+func massMentionMin(k loopkit.Kit) int {
+	if raw := strings.TrimSpace(k.Config("mass_mention_min")); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n > 1 {
+			return n
+		}
+	}
+	return 5
+}
+
+// isTrackedChat reports whether this chat is one KARMAX actively monitors (it's
+// in the wacli webhook's scope). Untracked chats only reach us because they
+// @-mentioned the bot, so they get stricter treatment.
+func isTrackedChat(ctx context.Context, k loopkit.Kit, chatID string) bool {
+	chats, err := shared.MonitoredChats(ctx, k)
+	if err != nil {
+		return true // can't tell — assume tracked rather than wrongly ignoring
+	}
+	target := shared.NormalizeChatID(chatID)
+	for _, c := range chats {
+		if shared.NormalizeChatID(c) == target {
+			return true
+		}
+	}
+	return false
 }
 
 // isReplyGroup reports whether chatID is a configured trusted "reply group"
