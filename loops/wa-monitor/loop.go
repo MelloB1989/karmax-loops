@@ -179,7 +179,16 @@ func run(ctx context.Context, k loopkit.Kit) error {
 		return nil
 	}
 
-	doPass := func() error {
+	// sentThisRun records whether a pass actually put a message in the chat, so
+	// the follow-up pass knows to hold back.
+	justReplied := false
+	sentThisRun := false
+
+	// justReplied is true on a follow-up pass that comes straight after this run
+	// already sent a message. Without it the second pass would answer the same
+	// conversational beat again — which is exactly how the group got two
+	// near-identical replies seconds apart.
+	doPass := func(justReplied bool) error {
 		k.Logf("wa-monitor: proxying message in %q (group=%v, mentioned=%v)", who, isGroup, mentioned)
 
 		wacli := strings.TrimSpace(k.Config("wacli"))
@@ -282,6 +291,7 @@ func run(ctx context.Context, k loopkit.Kit) error {
 			"You have ONE tool: `wacli`, the operator's WhatsApp CLI. Use it to look things up before answering — e.g. read another conversation with\n" +
 			"  args: [\"messages\", \"--chat\", \"<name|phone|jid>\", \"--limit\", \"15\"]\n" +
 			"or resolve a person with args: [\"resolve\", \"<name>\"]. If someone asks what another chat said, LOOK IT UP instead of saying you can't see it.\n\n" +
+			justRepliedNote(justReplied) +
 			"How to decide:\n" + policy + "\n" +
 			"Answer with ONE verb on the FIRST line, then its content:\n" +
 			"REPLY: <the exact message to send, in the operator's voice — use this whenever you can simply answer>\n" +
@@ -311,6 +321,7 @@ func run(ctx context.Context, k loopkit.Kit) error {
 				} else {
 					outcome = "ACTED: replied — " + oneLineTrunc(payload, 220)
 					escalate = false
+					sentThisRun = true
 					k.Logf("wa-monitor: gateway handled %q without claude_code", who)
 				}
 			case "ESCALATE":
@@ -385,11 +396,12 @@ func run(ctx context.Context, k loopkit.Kit) error {
 	// Run, then make exactly one more pass if messages arrived while we worked
 	// (the harness re-reads the thread, so it skips anything already answered).
 	for {
-		err := doPass()
+		err := doPass(justReplied)
 		if !gate.release() {
 			return err
 		}
-		k.Logf("wa-monitor: new messages arrived in %q while replying — one more pass", who)
+		justReplied = sentThisRun
+		k.Logf("wa-monitor: new messages arrived in %q while replying — one more pass (just replied: %v)", who, justReplied)
 	}
 }
 
@@ -828,4 +840,18 @@ func wacliTool(wacliPath string) loopkit.Tool {
 			return truncate(string(out), 6000), nil
 		},
 	}
+}
+
+// justRepliedNote warns the model that this run ALREADY sent a message moments
+// ago. New messages arrived while it was composing, so it gets one more look —
+// but continuing the same beat produces the double-reply the group complained
+// about, so the bar for speaking again is deliberately high.
+func justRepliedNote(justReplied bool) string {
+	if !justReplied {
+		return ""
+	}
+	return "IMPORTANT: you ALREADY replied in this chat seconds ago — your message is the most recent one you sent. " +
+		"These are just the messages that landed while you were typing. Only send something again if they raise a " +
+		"genuinely NEW point that your last message did not address. If they are reactions to it, banter, or the same " +
+		"topic continuing — answer SKIP. Do not restate or rephrase what you just said.\n\n"
 }
