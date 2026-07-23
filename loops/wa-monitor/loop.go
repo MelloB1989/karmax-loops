@@ -277,6 +277,31 @@ func run(ctx context.Context, k loopkit.Kit) error {
 			"   INFORM: <an update the operator should simply KNOW — a payment/receipt confirmation, a status update, 'they'll get back to us', a doc received — needs NO decision and NO reply. Becomes a notification, not an approval.>\n" +
 			"   SKIP: <nothing worth surfacing — chatter, noise, already handled>"
 
+		// ---- COMMANDS GO TO THE FULL ORCHESTRATOR --------------------------
+		// When the operator directly instructs KARMAX (an @-mention of the bot,
+		// or a reply to a bot message), route it to the FULL agent — which has
+		// the real toolset (reminders, calendar, scheduler, Google Workspace,
+		// sending WhatsApp, delegating to Claude Code). The gateway can only
+		// reply or flag; it can't actually DO "remind me to build the apk in 2
+		// hours". This is the difference between answering and acting.
+		if commanded && !justReplied {
+			askPrompt := "You are KARMAX and you've been DIRECTLY instructed by the operator over WhatsApp, in the chat \"" + who + "\" (chat id: " + chatID + ").\n\n" +
+				"Their message: " + content + "\n\n" +
+				"Recent thread (oldest first, for context):\n" + truncate(thread15(ctx, k, chatID), 3000) + "\n\n" +
+				"CARRY OUT the instruction using your tools — set the reminder / calendar event / schedule, look things up, research, whatever it asks (for a relative time like \"in 2 hours\" compute the absolute time from now). If it's just conversation, simply answer.\n" +
+				"THEN reply IN THAT CHAT so the operator (and the group) can see it was done, by sending: `" + wacli + " send --to " + chatID + " --text \"...\"`" + replyToArg(triggerMsgID) + " — concise, in the operator's voice. Confirm exactly what you did (e.g. \"done, reminder set for 1:35am\").\n" +
+				"Do NOT reply to your own previous messages; only act on THIS instruction."
+			if reply, aerr := k.Ask(ctx, askPrompt); aerr != nil {
+				k.Logf("wa-monitor: full-agent command failed for %q (%v) — falling back to gateway", who, aerr)
+			} else {
+				sentThisRun = true
+				outcome := "ACTED: handled operator command — " + oneLineTrunc(reply, 200)
+				k.Logf("wa-monitor: %s", outcome)
+				_ = k.ShortSet(chatID, "did_"+time.Now().UTC().Format("150405"), truncate(outcome, 300), shortMemoryTTL)
+				return nil
+			}
+		}
+
 		// ---- GATEWAY FIRST -------------------------------------------------
 		// Try one cheap main-model call before spawning a Claude Code run. The
 		// gateway has NO tools, so it either writes the reply itself, routes the
@@ -902,4 +927,18 @@ func justRepliedNote(justReplied bool) string {
 		"These are just the messages that landed while you were typing. Only send something again if they raise a " +
 		"genuinely NEW point that your last message did not address. If they are reactions to it, banter, or the same " +
 		"topic continuing — answer SKIP. Do not restate or rephrase what you just said.\n\n"
+}
+
+// thread15 returns the recent thread text for a chat (best-effort, empty on error).
+func thread15(ctx context.Context, k loopkit.Kit, chatID string) string {
+	t, _ := k.ReadWhatsApp(ctx, chatID, 15)
+	return t
+}
+
+// replyToArg builds the optional `--reply-to <id>` fragment for a wacli send.
+func replyToArg(msgID string) string {
+	if strings.TrimSpace(msgID) == "" {
+		return ""
+	}
+	return " (add --reply-to " + msgID + " to quote the message you're answering)"
 }
