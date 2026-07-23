@@ -317,7 +317,14 @@ func run(ctx context.Context, k loopkit.Kit) error {
 				if strings.TrimSpace(payload) == "" {
 					k.Logf("wa-monitor: gateway REPLY was empty for %q — escalating", who)
 				} else if serr := sendViaWacli(ctx, k, chatID, payload, triggerMsgID); serr != nil {
-					k.Logf("wa-monitor: gateway reply send failed for %q (%v) — escalating", who, serr)
+					if serr == errDuplicateSend {
+						// Already said this — say nothing rather than repeating.
+						outcome = "SKIP: would have repeated the previous message"
+						escalate = false
+						k.Logf("wa-monitor: suppressed duplicate reply to %q", who)
+					} else {
+						k.Logf("wa-monitor: gateway reply send failed for %q (%v) — escalating", who, serr)
+					}
 				} else {
 					outcome = "ACTED: replied — " + oneLineTrunc(payload, 220)
 					escalate = false
@@ -548,15 +555,43 @@ func parseGatewayOutcome(out string) (verb, payload string) {
 	if trimmed == "" {
 		return "", ""
 	}
-	upper := strings.ToUpper(trimmed)
-	for _, v := range []string{"ESCALATE", "APPROVE", "REMIND", "INFORM", "REPLY", "SKIP"} {
-		if strings.HasPrefix(upper, v) {
-			rest := strings.TrimSpace(trimmed[len(v):])
-			rest = strings.TrimSpace(strings.TrimPrefix(rest, ":"))
-			return v, rest
+	verbs := []string{"ESCALATE", "APPROVE", "REMIND", "INFORM", "REPLY", "SKIP"}
+	// Scan LINES for the first one that opens with a verb. Requiring the verb at
+	// position 0 of the whole response was too strict: once the model has tools
+	// it often narrates a line before committing ("Let me check that chat…"),
+	// which made parsing fail and forced a needless claude_code escalation —
+	// and each escalated run then sent its own message, duplicating replies.
+	lines := strings.Split(trimmed, "\n")
+	for i, line := range lines {
+		l := strings.TrimSpace(line)
+		l = strings.TrimLeft(l, "*_-# ") // tolerate markdown emphasis/bullets
+		upper := strings.ToUpper(l)
+		for _, v := range verbs {
+			if !strings.HasPrefix(upper, v) {
+				continue
+			}
+			// Strip any markdown/punctuation the model wrapped the verb in
+			// (e.g. "**REPLY**:") so it never leaks into the sent message.
+			rest := strings.TrimSpace(strings.TrimLeft(strings.TrimSpace(l[len(v):]), "*_: "))
+			// A REPLY body may continue on following lines.
+			if v == "REPLY" && i+1 < len(lines) {
+				if tail := strings.TrimSpace(strings.Join(lines[i+1:], "\n")); tail != "" {
+					if rest == "" {
+						rest = tail
+					} else {
+						rest = rest + "\n" + tail
+					}
+				}
+			}
+			return v, strings.TrimSpace(rest)
 		}
 	}
 	return "", ""
+}
+
+// normalizeSent reduces a message to a comparable form for duplicate detection.
+func normalizeSent(s string) string {
+	return strings.Join(strings.Fields(strings.ToLower(strings.TrimSpace(s))), " ")
 }
 
 // sendViaWacli posts a message through the local wacli HTTP API, quoting
@@ -564,6 +599,13 @@ func parseGatewayOutcome(out string) (verb, payload string) {
 // the gateway path, which composes the text itself instead of delegating the
 // send to a Claude Code run.
 func sendViaWacli(ctx context.Context, k loopkit.Kit, chatID, text, replyToID string) error {
+	// Never send the same thing twice. Siva got the identical
+	// "Visiting today with the team — see you post 2" message back-to-back
+	// because two runs each composed it independently; a deterministic guard
+	// here is the only thing that reliably stops that.
+	if prev, ok, _ := k.ShortGet(chatID, "last_sent"); ok && normalizeSent(prev) == normalizeSent(text) {
+		return errDuplicateSend
+	}
 	payload := map[string]string{"to": chatID, "text": text}
 	if strings.TrimSpace(replyToID) != "" {
 		payload["reply_to"] = replyToID
@@ -580,8 +622,14 @@ func sendViaWacli(ctx context.Context, k loopkit.Kit, chatID, text, replyToID st
 	if status < 200 || status > 299 {
 		return fmt.Errorf("wacli send: HTTP %d: %s", status, oneLineTrunc(resp, 160))
 	}
+	// Remember the exact text so a later pass (or the harness, via short-term
+	// memory) can tell it has already been said.
+	_ = k.ShortSet(chatID, "last_sent", text, shortMemoryTTL)
 	return nil
 }
+
+// errDuplicateSend marks a send suppressed because it repeated the last message.
+var errDuplicateSend = fmt.Errorf("duplicate of the message just sent — suppressed")
 
 // shortMemoryTTL is how long this loop's per-chat scratch notes live. Long
 // enough to carry a conversation, short enough that stale context expires on
