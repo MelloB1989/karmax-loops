@@ -289,6 +289,7 @@ func run(ctx context.Context, k loopkit.Kit) error {
 				"Their message: " + content + "\n\n" +
 				"Recent thread (oldest first, for context):\n" + truncate(thread15(ctx, k, chatID), 3000) + "\n\n" +
 				"CARRY OUT the instruction using your tools — set the reminder / calendar event / schedule, look things up, research, whatever it asks (for a relative time like \"in 2 hours\" compute the absolute time from now). If it's just conversation, simply answer.\n" +
+				"If you genuinely CANNOT do it because you're missing information (you don't have the credentials/file/detail it needs, or it's not in memory), do NOT go silent or say a vague \"standing by\" — reply in the chat stating plainly what's blocking you and asking for the one specific thing you need.\n" +
 				"THEN reply IN THAT CHAT so the operator (and the group) can see it was done, by sending: `" + wacli + " send --to " + chatID + " --text \"...\"`" + replyToArg(triggerMsgID) + " — concise, in the operator's voice. Confirm exactly what you did (e.g. \"done, reminder set for 1:35am\").\n" +
 				"Do NOT reply to your own previous messages; only act on THIS instruction."
 			if reply, aerr := k.Ask(ctx, askPrompt); aerr != nil {
