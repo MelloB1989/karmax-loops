@@ -46,7 +46,20 @@ def folded(text, key):
     return scalar(text, key)
 
 
+def existing_pins():
+    """The digests already published, keyed by (name, version)."""
+    if not os.path.exists("index.json"):
+        return {}
+    try:
+        index = json.load(open("index.json"))
+    except json.JSONDecodeError:
+        return {}
+    return {(e.get("name"), e.get("version")): e["sha256"]
+            for e in index.get("entries", []) if e.get("sha256")}
+
+
 def workflows(artifacts_dir, strict):
+    published = existing_pins()
     for path in sorted(glob.glob("workflows/*/loop.yaml")):
         name = os.path.basename(os.path.dirname(path))
         text = open(path).read()
@@ -65,10 +78,16 @@ def workflows(artifacts_dir, strict):
         artifact = os.path.join(artifacts_dir, f"{name}-{version}.kloop")
         if os.path.exists(artifact):
             entry["sha256"] = sha256(artifact)
+        elif published.get((name, version)):
+            # The pin already in index.json, kept. Regenerating after building
+            # ONE workflow used to silently unpin every other entry — which is
+            # worse than never having pinned them, because the diff looks like
+            # routine churn and nobody reviewing it sees a digest disappear.
+            entry["sha256"] = published[(name, version)]
         elif strict:
             sys.exit(f"no built artifact for {name} {version} at {artifact}")
         else:
-            print(f"warning: no artifact for {name} {version}; leaving it unpinned",
+            print(f"warning: no artifact for {name} {version} and no pin on record; leaving it unpinned",
                   file=sys.stderr)
 
         # The tools it declares, so "this needs WhatsApp set up" is answerable

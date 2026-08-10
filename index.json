@@ -26,6 +26,20 @@
       "sha256": "e47f8c9d4a29673291882613971820be9fa86b0e1ab17d352209dc80274a61ab"
     },
     {
+      "name": "daily-post",
+      "kind": "workflow",
+      "version": "1.0.2",
+      "description": "Reads your day \u2014 what you built, who you met, what you said, what memory knows \u2014 and, when the day was worth it, writes one post and publishes it to X and LinkedIn. Nothing is approved first, so it never names anyone: the host refuses any post containing a person, a client, an amount, a phone number or anything shaped like a credential, and enforces two posts a day at most.",
+      "author": "MelloB1989",
+      "source": "workflows/daily-post",
+      "artifact": "https://github.com/MelloB1989/karmax-loops/releases/download/daily-post-1.0.2/daily-post-1.0.2.kloop",
+      "sha256": "79115f1ed3aee0de1162802fef4796e63b3984aa87cadaac567bc2cea721b395",
+      "requires": [
+        "linkedin.post",
+        "x.post"
+      ]
+    },
+    {
       "name": "gchat-watch",
       "kind": "workflow",
       "version": "1.0.0",

@@ -1,0 +1,44 @@
+name: daily-post
+version: 1.0.2
+description: >
+  Reads your day — what you built, who you met, what you said, what memory
+  knows — and, when the day was worth it, writes one post and publishes it to X
+  and LinkedIn. Nothing is approved first, so it never names anyone: the host
+  refuses any post containing a person, a client, an amount, a phone number or
+  anything shaped like a credential, and enforces two posts a day at most.
+
+# Hourly through the evening rather than once, so a daemon that was down at six
+# still gets the day out. The loop posts at most once per platform per day.
+schedule: "0 18-22 * * *"
+memory_mb: 64
+
+host:
+  - log
+  - config
+  - ask
+  - recall
+  - tool
+  - short_set
+  - short_get
+  - short_all
+
+# The two write tools here are the only ones in the registry that make something
+# visible to strangers. Read this list before installing.
+#
+# Note what is NOT here: no whatsapp_send_message. This loop reads WhatsApp and
+# cannot use it. All WhatsApp automation belongs to wa-monitor.
+tools:
+  - activity.recent            # what you built — task descriptions, never output
+  - google_workspace           # today's calendar, titles only
+  - whatsapp_search_messages   # YOUR OWN outgoing messages, never other people's
+  - x.post
+  - linkedin.post
+
+capabilities:
+  - tool:agent.ask
+  - memory:nexus
+  # Needed for short_set — the once-a-day record and the no-repeats
+  # fingerprints. KARMAX gates short-term notes behind the same capability as
+  # long-term memory writes, so this reads as more authority than the loop
+  # actually uses: it calls short_set and never remember.
+  - memory:nexus:write
