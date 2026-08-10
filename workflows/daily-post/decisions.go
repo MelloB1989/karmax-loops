@@ -95,11 +95,23 @@ func stripNames(s string) string {
 // this safe — the host checks the result. The rules are here so the model
 // spends its attempt on something publishable rather than producing five drafts
 // that all get refused.
-func (d day) brief(platform string, limit int) string {
+func (d day) brief(platform string, limit int, force bool) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, `Write one %s post, in the operator's own voice, about their day.
+	// Who is asking and why, stated first.
+	//
+	// An earlier version opened with "write in the operator's own voice", and
+	// models refused it outright — with memory context alongside describing an
+	// assistant that messages people as its principal, that reads as a request
+	// to help impersonate somebody. It is not: this is a personal assistant
+	// drafting for the person it works for, on that person's own account, and
+	// saying so plainly is the difference between a draft and a lecture.
+	fmt.Fprintf(&b, `You are the personal assistant of the person described below.
+Draft a short %s post for their own account, about their own day.
 
-What actually happened today:
+They asked you to do this. It is their account, their day and their words —
+the way a chief of staff drafts something their principal then puts out.
+
+What they did today:
 `, platform)
 
 	writeList := func(label string, items []string) {
@@ -127,7 +139,20 @@ Rules, all of them hard:
 - Plain, specific, and true. One idea. If the day was ordinary, say something small and honest rather than inflating it.
 
 Reply with the post and nothing else. No preamble, no quotes around it, no alternatives.
-If the day genuinely contains nothing publishable under those rules, reply with exactly: SKIP`, limit)
+`, limit)
+
+	// Whether declining is allowed.
+	//
+	// Normally it is, and SKIP is the right answer on a day with nothing in it.
+	// Under FORCE it is not — the operator has explicitly asked to see what
+	// would be written, and a dry run that answers "nothing today" for a week
+	// teaches them nothing about what this thing would say in their name.
+	if force {
+		b.WriteString("Even if the day was quiet, write something small and true rather than declining. " +
+			"A modest observation is fine. Do not inflate it, and do not invent anything that is not above.")
+	} else {
+		b.WriteString("If the day genuinely contains nothing publishable under those rules, reply with exactly: SKIP")
+	}
 	return b.String()
 }
 
@@ -160,9 +185,32 @@ func cleanDraft(s string) string {
 
 // skipped reports whether the model declined, which is a valid answer and not
 // an error. Checked after cleaning, since it may arrive fenced or quoted.
+//
+// A model that talks its way out of the task counts as declining too. Without
+// this, "I can't help with this. The request asks me to write content
+// impersonating a specific person..." gets treated as a draft — sent to the
+// operator during a dry run, and offered to the platform outside one.
 func skipped(draft string) bool {
 	d := strings.TrimSpace(strings.TrimRight(cleanDraft(draft), ".!"))
-	return strings.EqualFold(d, "SKIP") || d == ""
+	if strings.EqualFold(d, "SKIP") || d == "" {
+		return true
+	}
+	lower := strings.ToLower(d)
+	for _, opener := range refusalOpeners {
+		if strings.HasPrefix(lower, opener) {
+			return true
+		}
+	}
+	return false
+}
+
+// refusalOpeners are how a model says no. Matched at the start only, so a post
+// that happens to contain "I can't" halfway through is still a post.
+var refusalOpeners = []string{
+	"i can't", "i cannot", "i can not", "i won't", "i will not",
+	"i'm not able", "i am not able", "i'm unable", "i am unable",
+	"i don't feel comfortable", "i do not feel comfortable",
+	"sorry, i", "i'm sorry", "i apologize", "i apologise",
 }
 
 // dedupeKey is what makes a post recognisable as one already made.

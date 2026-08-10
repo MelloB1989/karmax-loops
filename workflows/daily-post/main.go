@@ -17,6 +17,10 @@
 //
 // Config (KARMAX_LOOP_DAILY_POST_*):
 //
+//	FORCE      "true" to write a post regardless of how quiet the day was.
+//	           For dry runs: it shows you what it would say on a day it would
+//	           normally stay silent on. It does NOT bypass the privacy guard or
+//	           the rate limit — nothing in this module can.
 //	PLATFORMS  comma-separated, default "x,linkedin"
 //	MIN_HOUR   earliest local hour it will post, default 17 (so it sees a day)
 //	TZ         the operator's timezone, e.g. Asia/Kolkata. UTC if unset.
@@ -58,7 +62,9 @@ func run() {
 
 func post() error {
 	now := time.Now().In(where())
-	if h := minHour(); now.Hour() < h {
+	forced := strings.EqualFold(strings.TrimSpace(loopwasm.Config("FORCE")), "true")
+
+	if h := minHour(); now.Hour() < h && !forced {
 		loopwasm.Log("daily-post: it is %02d:00, waiting until %02d:00 to see the whole day", now.Hour(), h)
 		return nil
 	}
@@ -67,18 +73,27 @@ func post() error {
 	d := gather(today)
 
 	if ok, why := d.worthPosting(); !ok {
-		loopwasm.Log("daily-post: %s", why)
-		// Recorded so a run later today does not re-gather and re-decide.
-		_ = loopwasm.ShortSet(stateGroup, "quiet:"+today, why, 12*3600)
-		return nil
+		if !forced {
+			loopwasm.Log("daily-post: %s", why)
+			// Recorded so a run later today does not re-gather and re-decide.
+			_ = loopwasm.ShortSet(stateGroup, "quiet:"+today, why, 12*3600)
+			return nil
+		}
+		loopwasm.Log("daily-post: %s — writing anyway because FORCE is set", why)
 	}
 
+	// A run somebody asked for is a request to see something now. The
+	// once-a-day rule is there to stop the five scheduled evening runs turning
+	// into five posts, and applying it to a hand-triggered run means the
+	// operator gets one look per day while they are still tuning this.
+	onDemand := loopwasm.Trigger().Kind == "manual"
+
 	for _, platform := range platforms() {
-		if done, _, _ := loopwasm.ShortGet(stateGroup, "posted:"+platform+":"+today); done != "" {
+		if done, _, _ := loopwasm.ShortGet(stateGroup, "posted:"+platform+":"+today); done != "" && !onDemand {
 			loopwasm.Log("daily-post: %s already had today's post", platform)
 			continue
 		}
-		if err := postTo(platform, d); err != nil {
+		if err := postTo(platform, d, forced); err != nil {
 			// One platform failing is not a reason to skip the other.
 			loopwasm.Log("daily-post: %s: %v", platform, err)
 			continue
@@ -87,13 +102,18 @@ func post() error {
 	return nil
 }
 
-func postTo(platform string, d day) error {
+func postTo(platform string, d day, forced bool) error {
 	limit := limits[platform]
 	if limit == 0 {
 		limit = 280
 	}
 
-	raw, err := loopwasm.Ask(d.brief(platform, limit))
+	// Summarize rather than Ask: both go through the same gateway, but this one
+	// is text in, text out with no tools attached. The model writing something
+	// that will be published unread has no business being able to read a file or
+	// send a message on the way, and the brief already contains everything it
+	// needs.
+	raw, err := loopwasm.Summarize(d.brief(platform, limit, forced))
 	if err != nil {
 		return fmt.Errorf("could not write a draft: %w", err)
 	}
@@ -111,16 +131,30 @@ func postTo(platform string, d day) error {
 		return fmt.Errorf("this is the same thing that was posted on %s", when)
 	}
 
-	out, err := loopwasm.Tool(platform+".post", map[string]any{"text": draft})
-	if err != nil {
+	var result struct {
+		DryRun bool   `json:"dry_run"`
+		URL    string `json:"url"`
+	}
+	if err := loopwasm.ToolJSON(platform+".post", map[string]any{"text": draft}, &result); err != nil {
 		// A refusal is the guard doing its job and is worth seeing in full, since
 		// it says exactly what was wrong with the draft.
 		return fmt.Errorf("refused: %w", err)
 	}
 
+	// The day marker either way, so a dry run sends one draft per platform per
+	// evening rather than one per hourly run.
 	_ = loopwasm.ShortSet(stateGroup, "posted:"+platform+":"+d.Date, draft, 36*3600)
+
+	if result.DryRun {
+		// Deliberately NOT fingerprinted. A draft that only went to the operator
+		// has not been said, and recording it would make the real post look like
+		// a repeat for three weeks after the dry run ends.
+		loopwasm.Log("daily-post: dry run — sent the %s draft to the operator", platform)
+		return nil
+	}
+
 	_ = loopwasm.ShortSet(stateGroup, "said:"+d.Date+":"+platform, key, keptDays*24*3600)
-	loopwasm.Log("daily-post: posted to %s: %s", platform, out)
+	loopwasm.Log("daily-post: posted to %s: %s", platform, result.URL)
 	return nil
 }
 

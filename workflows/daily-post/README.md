@@ -7,6 +7,22 @@ That last sentence is the whole design. Everything below exists because a post
 cannot be unpublished — it has already been seen, and the person it named did
 not choose to be written about.
 
+## Try it first
+
+```bash
+karmax social dry-run on
+karmax loops run daily-post
+```
+
+Every post it would make arrives on your WhatsApp instead, marked
+`✅ would post` or `🚫 refused`. It works before either account is connected —
+previewing is what you do before signing in.
+
+A run you ask for ignores the once-a-day rule, so you can iterate. On a quiet
+day it will normally decline; `KARMAX_LOOP_DAILY_POST_FORCE=true` makes it
+write anyway. That skips the "is today worth it" check and nothing else — not
+the privacy guard, not the rate limit.
+
 ## What it reads
 
 | Source | What it takes | What it does not take |

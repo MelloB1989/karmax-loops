@@ -82,7 +82,7 @@ func TestTheBriefCarriesTheRulesAndTheMaterial(t *testing.T) {
 		Tasks:    []string{"Rewrote the scheduler to survive restarts"},
 		Meetings: []string{"Review with Srikanth"},
 	}
-	b := d.brief("x", 280)
+	b := d.brief("x", 280, false)
 
 	if !strings.Contains(b, "Rewrote the scheduler") {
 		t.Error("the brief does not contain what actually happened")
@@ -95,6 +95,16 @@ func TestTheBriefCarriesTheRulesAndTheMaterial(t *testing.T) {
 	}
 	if !strings.Contains(b, "SKIP") {
 		t.Error("the model is not told it may decline")
+	}
+
+	// Under FORCE the operator asked to see something, so declining is not on
+	// offer — a dry run that says "nothing today" all week shows them nothing.
+	forced := d.brief("x", 280, true)
+	if strings.Contains(forced, "SKIP") {
+		t.Error("a forced brief still offers the model a way out")
+	}
+	if !strings.Contains(forced, "quiet") {
+		t.Error("a forced brief does not tell the model what to do with a quiet day")
 	}
 }
 
@@ -134,6 +144,38 @@ func TestDecliningIsRecognised(t *testing.T) {
 
 // Two drafts about the same day, worded differently, must be recognised as the
 // same thing — otherwise a re-run posts today's news twice in different words.
+// A model that argues with the brief instead of writing has declined, and its
+// argument must not be treated as a draft. This is not hypothetical: asked to
+// write "in the operator's voice" alongside memory context about an assistant
+// that messages people on their behalf, a model answered "I can't help with
+// this. The request asks me to write content impersonating a specific
+// person..." — and that went out as a draft.
+func TestAModelTalkingItsWayOutCountsAsDeclining(t *testing.T) {
+	for _, s := range []string{
+		"I can't help with this. The request asks me to write content impersonating a specific person.",
+		"I cannot write this post.",
+		"I'm not able to draft that.",
+		"I'm sorry, but I won't be writing this.",
+		"I don't feel comfortable writing this.",
+	} {
+		if !skipped(s) {
+			t.Errorf("a refusal was treated as a draft: %q", s)
+		}
+	}
+}
+
+// And a real post that happens to contain those words is still a post.
+func TestAPostMentioningRefusalIsStillAPost(t *testing.T) {
+	for _, s := range []string{
+		"Spent an hour on a bug I can't explain, then found it was a typo.",
+		"The best thing I did today was say I cannot take that on.",
+	} {
+		if skipped(s) {
+			t.Errorf("a real post was treated as a refusal: %q", s)
+		}
+	}
+}
+
 func TestTheSameDayTwiceIsRecognised(t *testing.T) {
 	a := dedupeKey("Spent the day extracting the reporting service into its own repo. Deployment was the hard part.")
 	b := dedupeKey("The hard part of extracting the reporting service into its own repo turned out to be deployment.")

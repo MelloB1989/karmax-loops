@@ -1,5 +1,5 @@
 name: daily-post
-version: 1.0.2
+version: 1.1.3
 description: >
   Reads your day — what you built, who you met, what you said, what memory
   knows — and, when the day was worth it, writes one post and publishes it to X
@@ -15,7 +15,8 @@ memory_mb: 64
 host:
   - log
   - config
-  - ask
+  - trigger
+  - summarize
   - recall
   - tool
   - short_set
@@ -35,7 +36,9 @@ tools:
   - linkedin.post
 
 capabilities:
-  - tool:agent.ask
+  # Drafting is text-in, text-out with no tools attached. A model whose output
+  # is published unread should not also be able to read a file on the way.
+  - tool:summarize
   - memory:nexus
   # Needed for short_set — the once-a-day record and the no-repeats
   # fingerprints. KARMAX gates short-term notes behind the same capability as
