@@ -187,7 +187,7 @@
     </div>
 
     <main id="list" aria-live="polite">
-      <div class="state" id="loading">reading loops/*/loop.json from GitHub…</div>
+      <div class="state" id="loading">reading index.json…</div>
     </main>
 
     <section class="publish" id="publish">
@@ -197,7 +197,7 @@
       <div class="steps">
         <div class="step"><div class="k">1 · scaffold</div>
           <pre><span class="g">karmax loops new</span> my-loop</pre>
-          <pre class="m"># loop.go + loop.json + README</pre></div>
+          <pre class="m"># recipes/*.yaml or workflows/*/loop.yaml</pre></div>
         <div class="step"><div class="k">2 · implement</div>
           <pre>k.<span class="a">Notify</span>, k.<span class="a">Harness</span>, k.<span class="a">Remember</span>,</pre>
           <pre>k.<span class="a">Propose</span>, k.<span class="a">Remind</span>, k.<span class="a">HTTP</span> …</pre></div>
@@ -260,39 +260,52 @@
 
   function fetchManifest(name){
     if (byName[name]) return Promise.resolve(byName[name]);
-    return fetch("https://raw.githubusercontent.com/" + REG + "/main/loops/" + name + "/loop.json")
-      .then(function(r){ if(!r.ok) throw new Error("loop.json HTTP " + r.status); return r.json(); })
-      .then(function(m){ m._dir = name; byName[name] = m; return m; });
+    return loadAll().then(function(){
+      if (!byName[name]) throw new Error("no loop called " + name);
+      return byName[name];
+    });
   }
 
+  // One request for the whole catalogue.
+  //
+  // This used to list loops/ through the GitHub API and then fetch a manifest
+  // per loop — N+1 requests against an endpoint that rate-limits unauthenticated
+  // callers at 60/hour, so the page broke for anybody who reloaded it a few
+  // times. index.json is generated on merge and is the same file the CLI reads,
+  // which also means the site cannot show a catalogue the CLI disagrees with.
+  var loading = null;
   function loadAll(){
-    list.innerHTML = '<div class="state">reading loops/*/loop.json from GitHub…</div>';
-    fetch("https://api.github.com/repos/" + REG + "/contents/loops")
-      .then(function(r){ if(!r.ok) throw new Error("GitHub API " + r.status + (r.status === 403 ? " (rate limit — try again in a bit)" : "")); return r.json(); })
-      .then(function(entries){
-        var dirs = entries.filter(function(e){ return e.type === "dir"; });
-        return Promise.all(dirs.map(function(d){
-          return fetchManifest(d.name).catch(function(){ return null; });
-        }));
-      })
-      .then(function(ms){
-        manifests = ms.filter(Boolean).sort(function(a,b){ return a.name < b.name ? -1 : 1; });
+    if (loading) return loading;
+    list.innerHTML = '<div class="state">reading index.json…</div>';
+    loading = fetch("https://raw.githubusercontent.com/" + REG + "/main/index.json")
+      .then(function(r){ if(!r.ok) throw new Error("index.json HTTP " + r.status); return r.json(); })
+      .then(function(idx){
+        manifests = (idx.entries || []).sort(function(a,b){
+          // Workflows and recipes interleave by name: the tier is a property of
+          // a loop, not a category somebody browsing is shopping within.
+          return a.name < b.name ? -1 : 1;
+        });
+        manifests.forEach(function(m){ m._dir = m.name; byName[m.name] = m; });
         statline.innerHTML = "<b>" + manifests.length + "</b> loop" + (manifests.length === 1 ? "" : "s") +
           " in the registry · pulled live from github.com/" + esc(REG);
         renderList();
       })
       .catch(function(err){
+        loading = null;
         statline.textContent = "registry unreachable";
-        list.innerHTML = '<div class="state err">couldn’t reach the registry: ' + esc(err.message) +
+        list.innerHTML = '<div class="state err">couldn\u2019t reach the registry: ' + esc(err.message) +
           '<br><button id="retry">retry</button></div>';
-        document.getElementById("retry").addEventListener("click", loadAll);
+        var b = document.getElementById("retry");
+        if (b) b.addEventListener("click", loadAll);
       });
+    return loading;
   }
 
   // ---- shared render bits ------------------------------------------------
 
   function triggerChips(m){
     var out = "";
+    if (m.kind) out += '<span class="chip">' + esc(m.kind) + "</span>";
     if (m.schedule) out += '<span class="chip sched">⟳ ' + esc(m.schedule) + "</span>";
     (m.events || []).forEach(function(ev){ out += '<span class="chip event">⚡ ' + esc(ev) + "</span>"; });
     if (m.webhook) out += '<span class="chip event">⇐ ' + esc(m.webhook) + "</span>";
@@ -300,7 +313,7 @@
   }
 
   function codeURL(m){
-    return m.repo || ("https://github.com/" + REG + "/tree/main/loops/" + m._dir);
+    return m.repo || ("https://github.com/" + REG + "/tree/main/" + (m.source || ("workflows/" + m._dir)));
   }
 
   // ---- home list ---------------------------------------------------------
@@ -382,8 +395,6 @@
   function renderDetail(name){
     detail.innerHTML = '<div class="state">loading ' + esc(name) + "…</div>";
     fetchManifest(name).then(function(m){
-      var module = (m.module || "github.com/" + REG);
-      var pkg = m.package || (m.module ? m.module : module + "/loops/" + m.name);
       var envName = m.name.toUpperCase().replace(/[^A-Z0-9]/g, "_");
 
       var cfgHTML = "";
@@ -406,8 +417,13 @@
           '<button type="button" data-cmd="karmax loops install ' + esc(m.name) + '">copy</button></div>' +
         '<div class="dgrid">' +
           '<div class="dbox"><h3>install details</h3><dl class="kv">' +
-            "<dt>module</dt><dd>" + esc(module) + "</dd>" +
-            "<dt>package</dt><dd>" + esc(pkg) + "</dd>" +
+            "<dt>kind</dt><dd>" + esc(m.kind === "recipe"
+              ? "recipe — one YAML file, interpreted"
+              : "workflow — signed WASM, sandboxed") + "</dd>" +
+            (m.requires && m.requires.length
+              ? "<dt>needs</dt><dd>" + esc(m.requires.join(", ")) + "</dd>" : "") +
+            (m.ship_with_karmax ? "<dt>shipped</dt><dd>installed with KARMAX</dd>" : "") +
+            (m.sha256 ? "<dt>sha256</dt><dd><code>" + esc(m.sha256.slice(0, 16)) + "…</code></dd>" : "") +
             '<dt>code</dt><dd><a href="' + codeURL(m) + '" rel="noopener">' + esc(codeURL(m).replace("https://github.com/", "")) + " ↗</a></dd>" +
           "</dl></div>" + cfgHTML +
         "</div>" +
@@ -415,7 +431,15 @@
 
       var slot = detail.querySelector("#readme .md");
       if (readmes[name]) { slot.outerHTML = '<div class="md">' + readmes[name] + "</div>"; return; }
-      fetch("https://raw.githubusercontent.com/" + REG + "/main/loops/" + name + "/README.md")
+      if (m.kind === "recipe") {
+        // A recipe IS its own documentation — the file is short and reading it
+        // is the review — so the source is shown rather than a README that
+        // would only restate it.
+        slot.outerHTML = '<div class="md"><p>Recipes are one readable file. ' +
+          '<a href="' + codeURL(m) + '" rel="noopener">Read it ↗</a></p></div>';
+        return;
+      }
+      fetch("https://raw.githubusercontent.com/" + REG + "/main/workflows/" + name + "/README.md")
         .then(function(r){ if (!r.ok) throw new Error("no README"); return r.text(); })
         .then(function(txt){
           readmes[name] = mdToHTML(txt);

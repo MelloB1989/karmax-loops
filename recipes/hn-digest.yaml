@@ -1,0 +1,26 @@
+# A morning Hacker News digest, pushed to the app.
+#
+# Was 90 lines of Go: fetch the top-story ids, fetch ten items, join the titles,
+# summarise, notify. The harness can reach the web itself, so the fetching and
+# the parsing were the loop doing by hand what its one real step already does.
+name: hn-digest
+on:
+  schedule: "0 0 9 * * *"
+
+steps:
+  - harness: >
+      Read the current Hacker News front page (https://news.ycombinator.com) and write a
+      short morning digest of the top 10 stories. One tight line each: what it is and why
+      it is interesting, plus the story's own source where there is one. Skip anything
+      that is only a poll or a job ad. Output ONLY the digest as plain text — no preamble,
+      no sign-off, no markdown headers.
+    as: digest
+
+  # The harness prints refusals to stdout and exits 0, so an empty or apologetic
+  # answer must not be pushed as though it were a digest.
+  - when: "{{ .digest }}"
+    notify:
+      title: "☕ Hacker News"
+      body: "{{ .digest }}"
+    else:
+      - log: "hn-digest: the harness returned nothing usable"

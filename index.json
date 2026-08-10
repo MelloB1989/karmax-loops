@@ -1,0 +1,118 @@
+{
+  "version": 1,
+  "registry_key": "OK3vMczEfd5RAhuOkr9uqHcksb8j_Y4X9pGtmRhDvS8",
+  "entries": [
+    {
+      "name": "chat-sweep",
+      "kind": "workflow",
+      "version": "1.0.0",
+      "description": "Reviews the monitored WhatsApp chats for pending items \u2014 unanswered questions, promised actions, approaching deadlines \u2014 and acts on the operator's behalf or flags decisions for approval.",
+      "author": "MelloB1989",
+      "source": "workflows/chat-sweep",
+      "artifact": "https://github.com/MelloB1989/karmax-loops/releases/download/chat-sweep-1.0.0/chat-sweep-1.0.0.kloop",
+      "sha256": "3a0cb4a503ac3dacd21a6774eca695201a07f295e8e0a9b4ca50fb4aef7cf91b",
+      "requires": [
+        "whatsapp.monitored"
+      ]
+    },
+    {
+      "name": "cold-scan",
+      "kind": "workflow",
+      "version": "1.0.0",
+      "description": "Walks older WhatsApp chats the operator is no longer actively texting in and distils a durable per-chat summary into the chat-summary store the memory retrieval sub-agent reads.",
+      "author": "MelloB1989",
+      "source": "workflows/cold-scan",
+      "artifact": "https://github.com/MelloB1989/karmax-loops/releases/download/cold-scan-1.0.0/cold-scan-1.0.0.kloop",
+      "sha256": "650394c7064b8928860c044e68e69bbac8390cd140affd48e83c580e578081cb",
+      "requires": [
+        "whatsapp.chats",
+        "whatsapp.messages"
+      ]
+    },
+    {
+      "name": "gchat-watch",
+      "kind": "workflow",
+      "version": "1.0.0",
+      "description": "Watches the operator's Google Chat spaces for pending items and acts, flags or reminds \u2014 the Google Chat counterpart to chat-sweep.",
+      "author": "MelloB1989",
+      "source": "workflows/gchat-watch",
+      "artifact": "https://github.com/MelloB1989/karmax-loops/releases/download/gchat-watch-1.0.0/gchat-watch-1.0.0.kloop",
+      "sha256": "939a29b68dcf278fd8fdd2c53e1ac452948f93e654b397d79af5ab5cce481208",
+      "requires": [
+        "google_workspace"
+      ]
+    },
+    {
+      "name": "wa-monitor",
+      "kind": "workflow",
+      "version": "1.0.0",
+      "description": "The proactive WhatsApp proxy. Reacts to incoming messages in monitored chats, answers what it confidently can in the operator's voice, and escalates anything that is a decision.",
+      "author": "MelloB1989",
+      "source": "workflows/wa-monitor",
+      "artifact": "https://github.com/MelloB1989/karmax-loops/releases/download/wa-monitor-1.0.0/wa-monitor-1.0.0.kloop",
+      "sha256": "f7f951d7eb86a1ee9e06ae17cd421e71cce5e8292e4e9dfc7f5bdce7e70a4809",
+      "requires": [
+        "comms.message",
+        "whatsapp.messages",
+        "whatsapp.monitored",
+        "whatsapp.read",
+        "whatsapp.send"
+      ],
+      "ship_with_karmax": true
+    },
+    {
+      "name": "daily-briefing",
+      "kind": "recipe",
+      "version": "1.0.0",
+      "description": "Morning briefing to the app feed. Set the whatsapp step's target to also send",
+      "author": "MelloB1989",
+      "source": "recipes/daily-briefing.yaml",
+      "artifact": "recipes/daily-briefing.yaml",
+      "sha256": "a0acd4301eadb7f5de316cee04788ee7d7a15e22d13b7608d39c96b5a27d3ff6",
+      "ship_with_karmax": true
+    },
+    {
+      "name": "hn-digest",
+      "kind": "recipe",
+      "version": "1.0.0",
+      "description": "A morning Hacker News digest, pushed to the app.",
+      "author": "MelloB1989",
+      "source": "recipes/hn-digest.yaml",
+      "artifact": "recipes/hn-digest.yaml",
+      "sha256": "6b753207a862bd24dc0b87fbc00956d9e3ec4e7b25b204e91dc87b0d61c0ac31"
+    },
+    {
+      "name": "hot-sync",
+      "kind": "recipe",
+      "version": "1.0.0",
+      "description": "Active memory capture. Converted from the compiled-in loop of the same name \u2014",
+      "author": "MelloB1989",
+      "source": "recipes/hot-sync.yaml",
+      "artifact": "recipes/hot-sync.yaml",
+      "sha256": "e2879227753d4ea95c6b7b879cc4dde1e69fc5329a0bde992027b445d07256c4",
+      "ship_with_karmax": true
+    },
+    {
+      "name": "profile-refresh",
+      "kind": "recipe",
+      "version": "1.0.0",
+      "description": "Keeps ABOUT_ME current. Converted from a 27-line loop that was one Ask.",
+      "author": "MelloB1989",
+      "source": "recipes/profile-refresh.yaml",
+      "artifact": "recipes/profile-refresh.yaml",
+      "sha256": "deca74f6635a5b05db2071e3005882563f48fd8b4d5694bbae481f722a723873",
+      "ship_with_karmax": true
+    },
+    {
+      "name": "tech-news",
+      "kind": "recipe",
+      "version": "1.0.0",
+      "description": "Daily news digest, ingested to memory. Runs on the harness rather than the",
+      "author": "MelloB1989",
+      "source": "recipes/tech-news.yaml",
+      "artifact": "recipes/tech-news.yaml",
+      "sha256": "b9703d907f8c420afe94d4a31199285fdbfd55cf27aaf56969992a5cc7453573",
+      "ship_with_karmax": true
+    }
+  ]
+}

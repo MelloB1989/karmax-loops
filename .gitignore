@@ -1,0 +1,6 @@
+# Built artifacts go to a GitHub Release, never into git history: a .kloop is
+# ~3MB and a registry carrying every version of every loop forever becomes a
+# clone nobody wants.
+*.kloop
+*.wasm
+dist/

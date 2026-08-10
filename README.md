@@ -4,76 +4,119 @@
 
 <h1 align="center">karmax-loops</h1>
 
-The public marketplace registry for [KARMAX](https://github.com/MelloB1989/KARMAX) loops —
-recurring automations (news digests, chat sweeps, watchers, syncs) that run inside the
-KARMAX personal AI daemon.
+The registry for [KARMAX](https://github.com/MelloB1989/KARMAX): recurring automations
+that run inside the personal AI daemon — news digests, chat sweeps, watchers, syncs.
 
-**Browse:** https://mellob1989.github.io/karmax-loops/ · or `karmax loops browse`
+**Browse:** `karmax loops browse` · **Install:** `karmax loops install <name>`
 
-## Loops in this registry
+## Two tiers
 
-**Default** (pre-installed with KARMAX): `tech-news`, `hot-sync`, `profile-refresh`,
-`daily-briefing`. **Optional**: `chat-sweep`, `act-on-pending`, `memory-bootstrap`,
-`gchat-watch`, `cold-scan`, `hn-digest` — install with `karmax loops install <name>`.
+|  | **Recipe** | **Workflow** |
+|---|---|---|
+| is | one YAML file | a signed WASM module |
+| written in | YAML | Go, Rust, anything targeting wasm |
+| runs as | data KARMAX interprets with its own tools | sandboxed code with a capability manifest |
+| can | what its verbs allow | only what its manifest declares |
+| install | write the file; no restart | verify, approve, restart |
+| lives in | [`recipes/`](recipes/) | [`workflows/`](workflows/) |
 
-## How it works
+Reach for a recipe first. Most automations are a schedule and a prompt, and that is a
+file you can read in ten seconds — no toolchain, no signing, no restart. Reach for a
+workflow when you need real control flow, state across steps, or tools of your own.
 
-- Every loop is a directory under [`loops/`](loops/) with a `loop.json` manifest
-  (name, description, version, author, tags, schedule, config keys).
-- **Registry-hosted loops** keep their Go code right here, next to the manifest —
-  no repo of your own needed. This repo is a Go module; KARMAX installs a loop with
-  `go get` + a blank import and a rebuild.
-- **External loops** live in the author's own module; only the manifest is here
-  (`"module": "github.com/you/karmax-my-loop"`).
-- The website is static (GitHub Pages, [`docs/`](docs/)) and reads `loops/*/loop.json`
-  live from this repo — merging a PR is deploying.
+## What KARMAX ships with
 
-## Install a loop
+`tech-news`, `hot-sync`, `profile-refresh`, `daily-briefing` (recipes, embedded in the
+binary) and `wa-monitor` (workflow). A fresh install works offline; everything else in
+this registry is fetched on request.
 
-```bash
-karmax loops browse            # see what's available
-karmax loops info hn-digest    # details
-karmax loops install hn-digest # go get + import + rebuild + restart
+## Installing
+
+```
+karmax loops browse                  # what is here
+karmax loops install cold-scan       # fetch, show what it wants, install
 ```
 
-## Publish a loop
+You are shown what it will be allowed to do before anything is written, and nothing is
+installed without you saying so. A workflow no registry you trust has countersigned
+needs `--untrusted`, and asks you to type its name rather than press y.
 
-```bash
-karmax loops new my-loop       # scaffold: loop.go + loop.json + README
-# implement Run() in loop.go — the loopkit.Kit gives you the daemon's powers:
-#   Ask (main agent) · Harness (Claude Code) · Remember/Recall (memory)
-#   Notify (app push) · Propose (approvals inbox) · Remind (phone reminder)
-#   SendWhatsApp/ReadWhatsApp · HTTP · Config · RunLoop · Trigger · Logf
-karmax loops publish my-loop   # validates + compiles, then opens a PR here
+## Publishing
+
+**A recipe** — open a PR adding `recipes/<name>.yaml`. It is read as data, so the
+review IS the diff.
+
+**A workflow:**
+
+```
+cd workflows/my-loop
+GOOS=wasip1 GOARCH=wasm go build -buildmode=c-shared -o my-loop.wasm .
+karmax wloop sign --manifest loop.yaml --module my-loop.wasm
 ```
 
-`publish` commits directly if you have write access, otherwise it forks and opens a
-pull request automatically (needs the [`gh` CLI](https://cli.github.com/)). To host
-the code in your own repo instead, scaffold with
-`karmax loops new my-loop --module github.com/you/karmax-my-loop`.
+Open a PR with the source and `loop.yaml`. Artifacts are attached to a GitHub Release
+rather than committed — a `.kloop` is ~3MB, and a registry carrying every version of
+every loop forever becomes a clone nobody wants. `index.json` points at the release and
+pins it by digest, which is the same guarantee without the weight.
 
-### Manifest reference (`loop.json`)
+While developing, skip signing entirely:
 
-```jsonc
-{
-  "name": "my-loop",             // kebab-case, unique in the registry
-  "description": "One line shown in the marketplace.",
-  "version": "0.1.0",
-  "author": "your-github-login",
-  "module": "",                  // empty = code lives in this repo under loops/<name>/
-  "package": "",                 // import path override (defaults sensibly)
-  "repo": "",                    // human link to the code (external loops)
-  "tags": ["news"],
-  "schedule": "0 0 9 * * *",     // informational; the loop registers its own schedule
-  "config": [                    // install-time env keys: KARMAX_LOOP_<NAME>_<KEY>
-    { "key": "api_key", "description": "…" }
-  ]
-}
+```
+karmax wloop sign --unsigned
+karmax wloop install my-loop-0.1.0.kloop --untrusted
 ```
 
-### Review bar
+## The manifest
 
-PRs are reviewed for: a truthful description, code that only uses the `loopkit.Kit`
-surface plus stdlib/public APIs, no secrets in code (use `k.Config`), and decisions
-routed properly (`Propose` for anything needing operator approval, `Remind` for
-operator-only actions, `Notify` for information).
+```yaml
+name: deal-watch
+version: 1.0.0
+description: Watches the CampX deal and answers questions about it
+schedule: "0 0 */4 * * *"
+memory_mb: 48
+
+# Host functions. Anything not listed is refused at runtime, not logged.
+host: [log, config, tool, remember, short_set, short_get]
+
+# KARMAX tools it may call. Every integration reaches a loop this way, so this
+# list is the whole of what it can touch outside its sandbox.
+tools:
+  - whatsapp.read
+  - google_workspace
+
+# Tools it IMPLEMENTS and lends to your agent. They exist only while the agent
+# is working on this loop's behalf.
+provides:
+  - name: deal.status
+    description: Where a named deal stands right now
+    parameters:
+      type: object
+      properties:
+        deal: {type: string, description: The deal to look up}
+      required: [deal]
+
+capabilities:
+  - memory:nexus
+  - memory:nexus:write
+```
+
+`tools:` is also what install grants — it is the list the operator reads, so naming the
+same tools again under `capabilities:` would only add a second place to get wrong.
+
+## Not yet carried over
+
+`act-on-pending` and `memory-bootstrap` were in the go-get registry and are not here
+yet. Both are more than a prompt on a schedule — they batch, checkpoint across runs,
+and share a pending-items queue — so they are workflow-tier conversions rather than
+recipes, and doing them badly would be worse than the wait. Their old source is in this
+repo's history (`git show main~1:loops/act-on-pending/loop.go`).
+
+Everything else from the old registry is here: `chat-sweep`, `cold-scan`, `gchat-watch`
+and `wa-monitor` as workflows, and `tech-news`, `hot-sync`, `profile-refresh`,
+`daily-briefing` and `hn-digest` as recipes.
+
+## index.json
+
+Generated by [`scripts/build-index.py`](scripts/build-index.py); a PR that changes a
+loop should regenerate it. `karmax loops browse` reads it directly, so merging is
+publishing.
