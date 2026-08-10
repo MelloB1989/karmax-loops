@@ -18,12 +18,12 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/MelloB1989/karmax-loops/workflows/internal/shared"
@@ -35,62 +35,13 @@ import (
 // time; only the sender-facing note is deduplicated.
 const awayNoteCooldown = 6 * time.Hour
 
-// ---- per-chat serialization -------------------------------------------------
-//
-// Every incoming message fires its own loop run. In a busy group several
-// messages land within seconds, so multiple runs used to execute CONCURRENTLY:
-// each independently read the same recent history, each decided the open
-// question still needed answering, and each sent its own reply — the operator
-// saw KARMAX answer the same thing two or three times seconds apart.
-//
-// Fix: at most ONE run per chat at a time. If a run is already in flight for
-// this chat, the new event doesn't spawn a second reply — it just marks the
-// chat dirty, and the in-flight run does exactly one more pass when it
-// finishes. That both removes duplicates and guarantees the late message is
-// still considered (the harness re-reads the thread, so it sees whatever was
-// already answered and skips it).
-type chatGate struct {
-	mu      sync.Mutex
-	running bool
-	pending bool
-}
-
-var chatGates sync.Map // chatID -> *chatGate
-
-func gateFor(chatID string) *chatGate {
-	g, _ := chatGates.LoadOrStore(chatID, &chatGate{})
-	return g.(*chatGate)
-}
-
-// acquire reports whether the caller may run now. If another run holds the
-// chat, it records that more work arrived and returns false.
-func (g *chatGate) acquire() bool {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	if g.running {
-		g.pending = true
-		return false
-	}
-	g.running = true
-	g.pending = false
-	return true
-}
-
-// release ends this pass and reports whether new messages arrived meanwhile
-// (in which case the caller should make exactly one more pass).
-func (g *chatGate) release() bool {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	if g.pending {
-		g.pending = false
-		return true // stay "running": we immediately do the follow-up pass
-	}
-	g.running = false
-	return false
-}
-
 //go:wasmexport run
 func run() {
+	// Anything a sweep queued goes out first, through the same guard as this
+	// loop's own replies — so a sweep that decided to answer something and this
+	// loop deciding the same produce one message, not two.
+	drainOutbox()
+
 	if err := monitor(); err != nil {
 		loopwasm.Log("wa-monitor: %v", err)
 	}
@@ -99,7 +50,9 @@ func run() {
 func monitor() error {
 	t := loopwasm.Trigger()
 	if t.Kind != "event" {
-		loopwasm.Log("wa-monitor: fires on comms.message events; a %s run does nothing", t.Kind)
+		// A manual or scheduled run still drained the outbox above, which is
+		// what makes a queued reply reachable without waiting for somebody to
+		// message the operator first.
 		return nil
 	}
 	content, _ := t.Payload["content"].(string)
@@ -570,72 +523,63 @@ func report(who, outcome string) string {
 	}
 }
 
-// parseGatewayOutcome pulls the leading verb and its payload out of a gateway
-// reply. The verb is on the first line; the payload is everything after it (so
-// a REPLY can span multiple lines). Returns ("","") when there's no known verb.
-func parseGatewayOutcome(out string) (verb, payload string) {
-	trimmed := strings.TrimSpace(out)
-	if trimmed == "" {
-		return "", ""
-	}
-	verbs := []string{"ESCALATE", "APPROVE", "REMIND", "INFORM", "REPLY", "SKIP"}
-	// Scan LINES for the first one that opens with a verb. Requiring the verb at
-	// position 0 of the whole response was too strict: once the model has tools
-	// it often narrates a line before committing ("Let me check that chat…"),
-	// which made parsing fail and forced a needless claude_code escalation —
-	// and each escalated run then sent its own message, duplicating replies.
-	lines := strings.Split(trimmed, "\n")
-	for i, line := range lines {
-		l := strings.TrimSpace(line)
-		l = strings.TrimLeft(l, "*_-# ") // tolerate markdown emphasis/bullets
-		upper := strings.ToUpper(l)
-		for _, v := range verbs {
-			if !strings.HasPrefix(upper, v) {
-				continue
-			}
-			// Strip any markdown/punctuation the model wrapped the verb in
-			// (e.g. "**REPLY**:") so it never leaks into the sent message.
-			rest := strings.TrimSpace(strings.TrimLeft(strings.TrimSpace(l[len(v):]), "*_: "))
-			// A REPLY body may continue on following lines.
-			if v == "REPLY" && i+1 < len(lines) {
-				if tail := strings.TrimSpace(strings.Join(lines[i+1:], "\n")); tail != "" {
-					if rest == "" {
-						rest = tail
-					} else {
-						rest = rest + "\n" + tail
-					}
-				}
-			}
-			return v, strings.TrimSpace(rest)
-		}
-	}
-	return "", ""
-}
-
-// normalizeSent reduces a message to a comparable form for duplicate detection.
-func normalizeSent(s string) string {
-	return strings.Join(strings.Fields(strings.ToLower(strings.TrimSpace(s))), " ")
-}
-
-// sendViaWacli posts a message through the local wacli HTTP API, quoting
-// replyToID when set so the reply threads under the message it answers. Used by
-// the gateway path, which composes the text itself instead of delegating the
-// send to a Claude Code run.
+// sendViaWacli is the ONLY place a WhatsApp message leaves KARMAX.
+//
+// Everything that wants to say something routes through here — this loop's own
+// replies, and anything a sweep queued. That is the point: chat-sweep used to
+// send directly through a harness, so two independent models could answer the
+// same question minutes apart in two voices with no shared record.
+//
+// The guard is a window, not a comparison with the last message. Siva got the
+// identical "Visiting today with the team — see you post 2" twice because two
+// runs each composed it independently; comparing only against last_sent misses
+// the same case as soon as anything else was said in between, which is the
+// normal shape of a conversation.
 func sendViaWacli(chatID, text, replyToID string) error {
-	// Never send the same thing twice. Siva got the identical
-	// "Visiting today with the team — see you post 2" message back-to-back
-	// because two runs each composed it independently; a deterministic guard
-	// here is the only thing that reliably stops that.
-	if prev, ok, _ := loopwasm.ShortGet(chatID, "last_sent"); ok && normalizeSent(prev) == normalizeSent(text) {
+	key := "sent:" + shared.SendKey(chatID, text)
+	if _, already, _ := loopwasm.ShortGet(chatID, key); already {
 		return errDuplicateSend
 	}
+	// Recorded BEFORE the send, not after. A send that succeeds and then fails
+	// to record would be free to repeat; one recorded and then failed is at
+	// worst a message not sent, which the operator can see and redo. Between
+	// silently saying something twice and visibly saying it once, the second is
+	// the failure to prefer.
+	_ = loopwasm.ShortSet(chatID, key, text, int(sendWindow.Seconds()))
+
 	if err := shared.SendWhatsApp(chatID, text, replyToID); err != nil {
+		// Released so a transient failure can be retried rather than being
+		// permanently suppressed by its own guard.
+		_ = loopwasm.ShortForget(chatID, key)
 		return err
 	}
-	// Remember the exact text so a later pass (or the harness, via short-term
-	// memory) can tell it has already been said.
+	// Kept for the prompt, which shows the model what it last said.
 	_ = loopwasm.ShortSet(chatID, "last_sent", text, int(shortMemoryTTL.Seconds()))
 	return nil
+}
+
+// sendWindow is how long a message counts as already said.
+//
+// Long enough to cover a retry storm or a loop firing repeatedly on the same
+// trigger; short enough that genuinely saying the same short thing again
+// tomorrow ("ok") still works.
+const sendWindow = 90 * time.Minute
+
+// drainOutbox sends what the sweeps queued.
+//
+// Through the same guard as everything else, so a sweep and this loop reaching
+// the same conclusion produce one message.
+func drainOutbox() {
+	for _, q := range shared.DrainOutbox() {
+		switch err := sendViaWacli(q.Chat, q.Text, ""); {
+		case err == nil:
+			loopwasm.Log("wa-monitor: sent a queued reply to %s (%s)", q.Chat, q.Why)
+		case errors.Is(err, errDuplicateSend):
+			loopwasm.Log("wa-monitor: dropped a queued reply to %s — already said", q.Chat)
+		default:
+			loopwasm.Log("wa-monitor: queued reply to %s failed: %v", q.Chat, err)
+		}
+	}
 }
 
 // errDuplicateSend marks a send suppressed because it repeated the last message.
@@ -664,14 +608,6 @@ func renderShortMemory(chatID string) string {
 	}
 	sb.WriteString("\n")
 	return sb.String()
-}
-
-func oneLineTrunc(s string, n int) string {
-	s = strings.TrimSpace(strings.ReplaceAll(s, "\n", " "))
-	if len(s) > n {
-		return s[:n] + "…"
-	}
-	return s
 }
 
 // payloadInt reads a numeric payload field (JSON round-trips make it float64).
@@ -737,92 +673,6 @@ func isReplyGroup(chatID string) bool {
 	return false
 }
 
-// groupKey returns the local (pre-@) part of a JID, lowercased.
-func groupKey(s string) string {
-	s = strings.ToLower(strings.TrimSpace(s))
-	if i := strings.IndexByte(s, '@'); i >= 0 {
-		s = s[:i]
-	}
-	return s
-}
-
-// isOperatorMentioned reports whether the operator's own WhatsApp number was
-// @-mentioned in the message. WhatsApp embeds mentions inline in the message
-// body as "@<number-digits>" (the display name is resolved client-side), so a
-// mention of the operator appears as "@" followed by their number. `operator`
-// holds the operator's normalized numbers/JIDs (digits, no @domain).
-func isOperatorMentioned(content string, operator map[string]bool) bool {
-	if !strings.Contains(content, "@") {
-		return false
-	}
-	// Digits-only copy of the content so "@ 91 76..." / formatting variations
-	// still match the operator's digit string.
-	var digits strings.Builder
-	for _, r := range content {
-		if r >= '0' && r <= '9' {
-			digits.WriteRune(r)
-		}
-	}
-	contentDigits := digits.String()
-	for num := range operator {
-		if num == "" || len(num) < 6 {
-			continue
-		}
-		if strings.Contains(content, "@"+num) || strings.Contains(contentDigits, num) {
-			return true
-		}
-	}
-	return false
-}
-
-// isBotMentioned reports whether KARMAX's own number/LID was @-mentioned — the
-// operator (or anyone) explicitly summoning the bot to do something. Bot ids
-// come from KARMAX_LOOP_WA_MONITOR_BOT_MENTIONS (comma-separated phone/LID
-// digit strings — the account's number AND its group @lid, since WhatsApp
-// mentions in groups often use the LID). Matches the same way as an operator
-// mention (inline "@<digits>").
-func isBotMentioned(content string) bool {
-	raw := strings.TrimSpace(loopwasm.Config("bot_mentions"))
-	if raw == "" || !strings.Contains(content, "@") {
-		return false
-	}
-	var digits strings.Builder
-	for _, r := range content {
-		if r >= '0' && r <= '9' {
-			digits.WriteRune(r)
-		}
-	}
-	contentDigits := digits.String()
-	for _, id := range strings.Split(raw, ",") {
-		id = strings.TrimSpace(id)
-		if i := strings.IndexAny(id, "@:"); i >= 0 {
-			id = id[:i]
-		}
-		if len(id) < 6 {
-			continue
-		}
-		if strings.Contains(content, "@"+id) || strings.Contains(contentDigits, id) {
-			return true
-		}
-	}
-	return false
-}
-
-// isTrivial reports whether an incoming message is too trivial to warrant
-// spinning up the assistant (acks, emoji, one-word replies).
-func isTrivial(s string) bool {
-	t := strings.TrimSpace(s)
-	if t == "" || len([]rune(t)) <= 3 {
-		return true
-	}
-	switch strings.ToLower(t) {
-	case "ok", "okay", "okk", "thanks", "thank you", "thx", "ty", "cool", "nice",
-		"great", "done", "haha", "lol", "yep", "nope", "sure", "fine", "hmm", "hmmm":
-		return true
-	}
-	return false
-}
-
 // lastLine returns the final non-empty line of the harness output (the loop
 // instructs it to end with the one-line outcome), truncated for display.
 func lastLine(s string) string {
@@ -872,3 +722,11 @@ func replyToArg(msgID string) string {
 }
 
 func main() {}
+
+// isBotMentioned reports whether KARMAX's own number or LID was @-mentioned —
+// somebody explicitly summoning the bot. The ids come from the loop's config
+// (the account's number AND its group @lid, since mentions in groups often use
+// the LID); the matching itself is mentionsAnyID, which is testable.
+func isBotMentioned(content string) bool {
+	return mentionsAnyID(content, loopwasm.Config("bot_mentions"))
+}

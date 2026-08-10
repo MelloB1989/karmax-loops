@@ -58,7 +58,7 @@ func sweep() error {
 		"For EACH chat:\n" +
 		fmt.Sprintf("1. Run: %s messages --chat \"<jid>\" --limit 20   (oldest-first; is_from_me=true is the operator)\n", wacli) +
 		"2. Determine whether something is pending on the OPERATOR'S side: an unanswered question to them, something they promised and haven't delivered, a deadline near, a follow-up they owe. Already-resolved threads or ones simply awaiting the OTHER person are NOT pending.\n" +
-		"3. If pending and ROUTINE (acknowledgement, confirming availability, a simple follow-up nudge, sharing already-known info) and you're confident how the operator would respond: act NOW — send with `" + wacli + " send --to \"<jid>\" --text \"...\"` in the operator's natural, human voice (concise; never reveal you're an AI).\n" +
+		"3. If pending and ROUTINE (acknowledgement, confirming availability, a simple follow-up nudge, sharing already-known info) and you're confident how the operator would respond: DRAFT the reply and report it as SEND — do NOT send it yourself, and do NOT run any send command. Write it in the operator's natural, human voice (concise; never reveal you're an AI).\n" +
 		"4. If it's a real DECISION, commitment, money, or anything sensitive/ambiguous: do NOT send — flag it as APPROVE.\n" +
 		"5. If the pending item is something ONLY the operator can personally do (send a document/file you don't have, a personal/family reply, an offline task): flag it as REMIND.\n\n" +
 		shared.ScanOutputSpec
@@ -71,12 +71,23 @@ func sweep() error {
 		return fmt.Errorf("the harness refused or errored: %.120s", out)
 	}
 
-	acted, approve, remind, inform := shared.ParseScanOutcomes(out)
-	loopwasm.Log("chat-sweep: %d chats reviewed — %d acted, %d need approval, %d reminders, %d fyi",
-		len(chats), len(acted), len(approve), len(remind), len(inform))
+	send, approve, remind, inform := shared.ParseScanOutcomes(out)
 
-	if len(acted) > 0 {
-		_ = loopwasm.Notify("✅ Handled while sweeping", "• "+strings.Join(acted, "\n• "))
+	// Queued, not sent. This loop no longer talks to WhatsApp: wa-monitor owns
+	// the send path, so a reply drafted here and a reply composed there cannot
+	// both go out.
+	queued, unparsed := shared.QueueScanSends(send, "drafted by chat-sweep")
+	loopwasm.Log("chat-sweep: %d chats reviewed — %d queued to send, %d need approval, %d reminders, %d fyi",
+		len(chats), queued, len(approve), len(remind), len(inform))
+
+	if queued > 0 {
+		_ = loopwasm.Notify("✉️ Replies queued", "• "+strings.Join(send, "\n• "))
+	}
+	// A draft that could not be parsed is shown rather than dropped: it was
+	// worth writing, and silently discarding it looks identical to never having
+	// thought of it.
+	if len(unparsed) > 0 {
+		shared.InformItems("Drafted but not sendable (no chat id)", unparsed)
 	}
 	shared.ProposeItems("Flagged by the chat-sweep loop while reviewing monitored WhatsApp chats.", approve)
 	shared.RemindItems("Flagged by the chat-sweep loop: only you can do this one.", remind)

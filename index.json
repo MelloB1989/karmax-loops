@@ -10,7 +10,7 @@
       "author": "MelloB1989",
       "source": "workflows/chat-sweep",
       "artifact": "https://github.com/MelloB1989/karmax-loops/releases/download/chat-sweep-1.0.0/chat-sweep-1.0.0.kloop",
-      "sha256": "3a0cb4a503ac3dacd21a6774eca695201a07f295e8e0a9b4ca50fb4aef7cf91b",
+      "sha256": "a372102a4ddcab081b63232db9673b6a4b7f71ff426b7157d387dfe0180ec526",
       "requires": [
         "whatsapp.monitored"
       ]
@@ -23,11 +23,7 @@
       "author": "MelloB1989",
       "source": "workflows/cold-scan",
       "artifact": "https://github.com/MelloB1989/karmax-loops/releases/download/cold-scan-1.0.0/cold-scan-1.0.0.kloop",
-      "sha256": "650394c7064b8928860c044e68e69bbac8390cd140affd48e83c580e578081cb",
-      "requires": [
-        "whatsapp.chats",
-        "whatsapp.messages"
-      ]
+      "sha256": "e47f8c9d4a29673291882613971820be9fa86b0e1ab17d352209dc80274a61ab"
     },
     {
       "name": "gchat-watch",
@@ -37,7 +33,7 @@
       "author": "MelloB1989",
       "source": "workflows/gchat-watch",
       "artifact": "https://github.com/MelloB1989/karmax-loops/releases/download/gchat-watch-1.0.0/gchat-watch-1.0.0.kloop",
-      "sha256": "939a29b68dcf278fd8fdd2c53e1ac452948f93e654b397d79af5ab5cce481208",
+      "sha256": "82df327400b78d7944f72d2ca10e015465fb1ef121d0bfa598fdeda6509e35c9",
       "requires": [
         "google_workspace"
       ]
@@ -50,13 +46,10 @@
       "author": "MelloB1989",
       "source": "workflows/wa-monitor",
       "artifact": "https://github.com/MelloB1989/karmax-loops/releases/download/wa-monitor-1.0.0/wa-monitor-1.0.0.kloop",
-      "sha256": "f7f951d7eb86a1ee9e06ae17cd421e71cce5e8292e4e9dfc7f5bdce7e70a4809",
+      "sha256": "ab896c57af520ac1148388f879ce11e05f1dd7d6d19ecc9fecd4c9144f5ee874",
       "requires": [
         "comms.message",
-        "whatsapp.messages",
-        "whatsapp.monitored",
-        "whatsapp.read",
-        "whatsapp.send"
+        "whatsapp.monitored"
       ],
       "ship_with_karmax": true
     },

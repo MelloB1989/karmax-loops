@@ -12,8 +12,8 @@ memory_mb: 64
 host: [log, config, summarize, tool, chat_summary_get, chat_summary_save]
 
 tools:
-  - whatsapp.chats
-  - whatsapp.messages
+  - whatsapp_list_chats
+  - whatsapp_search_messages
 
 capabilities:
   - tool:summarize

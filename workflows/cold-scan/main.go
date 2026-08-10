@@ -196,11 +196,19 @@ func summarize(c chatRec, msgs []msgRec) (string, bool) {
 }
 
 func listChats() ([]chatRec, error) {
-	raw, err := loopwasm.Tool("whatsapp.chats", map[string]any{"limit": 1000})
+	raw, err := loopwasm.Tool("whatsapp_list_chats", map[string]any{"limit": 1000})
 	if err != nil {
 		return nil, err
 	}
+	// wacli envelopes its lists ({"chats":[…]}), the way it envelopes messages.
+	// Both shapes are accepted so a change on either side is not an outage.
 	out := []byte(raw)
+	var wrap struct {
+		Chats []chatRec `json:"chats"`
+	}
+	if json.Unmarshal(out, &wrap) == nil && wrap.Chats != nil {
+		return wrap.Chats, nil
+	}
 	var chats []chatRec
 	if err := json.Unmarshal(out, &chats); err != nil {
 		return nil, err
@@ -226,8 +234,11 @@ func fetchMessages(jid string, limit int) []msgRec {
 }
 
 func runMessages(jid string, limit int, fromMeOnly bool) []msgRec {
-	raw, err := loopwasm.Tool("whatsapp.messages", map[string]any{
-		"chat": jid, "limit": limit, "from_me_only": fromMeOnly})
+	req := map[string]any{"chat": jid, "limit": limit}
+	if fromMeOnly {
+		req["from_me"] = "true"
+	}
+	raw, err := loopwasm.Tool("whatsapp_search_messages", req)
 	if err != nil {
 		return nil
 	}

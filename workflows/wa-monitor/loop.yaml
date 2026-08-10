@@ -29,9 +29,8 @@ host:
 # The one loop that can send as the operator, and the reason a capability list
 # is worth reading before installing anything.
 tools:
-  - whatsapp.send
-  - whatsapp.read
-  - whatsapp.messages
+  - whatsapp_send_message
+  - whatsapp_search_messages
   - whatsapp.monitored
 
 capabilities:
