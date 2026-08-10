@@ -157,6 +157,8 @@ func TestAModelTalkingItsWayOutCountsAsDeclining(t *testing.T) {
 		"I'm not able to draft that.",
 		"I'm sorry, but I won't be writing this.",
 		"I don't feel comfortable writing this.",
+		"I don't have any information about what actually happened today.",
+		"There's nothing here to write about.",
 	} {
 		if !skipped(s) {
 			t.Errorf("a refusal was treated as a draft: %q", s)
@@ -172,6 +174,33 @@ func TestAPostMentioningRefusalIsStillAPost(t *testing.T) {
 	} {
 		if skipped(s) {
 			t.Errorf("a real post was treated as a refusal: %q", s)
+		}
+	}
+}
+
+// KARMAX's own messages must never become material for a post.
+//
+// The dry-run drafts are sent to the operator's WhatsApp, which makes them
+// outgoing messages from the operator's account — so without this the loop
+// reads yesterday's draft back and writes today's post about it.
+func TestItDoesNotEatItsOwnOutput(t *testing.T) {
+	own := []string{
+		"✅ would post to x\n\nSpent the day on a sandbox.\n\n(dry run — nothing was published. `karmax social dry-run off` to go live.)",
+		"🚫 refused for linkedin\n\nShipped the report.\n\n— social: it names somebody",
+	}
+	for _, m := range own {
+		if !isOwnOutput(m) {
+			t.Errorf("KARMAX's own message was treated as the operator's: %.60s", m)
+		}
+	}
+
+	real := []string{
+		"I think we should ship the extraction before the review, it is lower risk that way.",
+		"Would post the numbers tomorrow once the run finishes.",
+	}
+	for _, m := range real {
+		if isOwnOutput(m) {
+			t.Errorf("a real message was discarded as KARMAX's own: %q", m)
 		}
 	}
 }

@@ -257,6 +257,7 @@ func ownMessages() []string {
 	var found struct {
 		Messages []struct {
 			Content   string    `json:"content"`
+			ChatJID   string    `json:"chat_jid"`
 			Timestamp time.Time `json:"timestamp"`
 		} `json:"messages"`
 	}
@@ -266,10 +267,23 @@ func ownMessages() []string {
 		return nil
 	}
 
+	// KARMAX's own chats with the operator are excluded, and this is not a
+	// nicety. Everything KARMAX sends on the operator's behalf — briefings, and
+	// the dry-run drafts themselves — is an outgoing message from their account,
+	// so "what did I say today" reads its own output back and writes tomorrow's
+	// post about yesterday's post. Left alone it compounds.
+	skip := map[string]bool{}
+	for _, jid := range loopwasm.OperatorChats() {
+		skip[normalise(jid)] = true
+	}
+
 	cutoff := time.Now().Add(-18 * time.Hour)
 	var out []string
 	for _, m := range found.Messages {
-		if m.Timestamp.Before(cutoff) {
+		if m.Timestamp.Before(cutoff) || skip[normalise(m.ChatJID)] {
+			continue
+		}
+		if isOwnOutput(m.Content) {
 			continue
 		}
 		// Only messages with something in them. "ok", "sure", "on my way" are
@@ -282,6 +296,21 @@ func ownMessages() []string {
 		}
 	}
 	return out
+}
+
+// normalise reduces a JID or phone number to its digits, so 917xxx,
+// 917xxx@s.whatsapp.net and +91 7xxx all compare equal.
+func normalise(jid string) string {
+	var b strings.Builder
+	for _, r := range jid {
+		if r >= '0' && r <= '9' {
+			b.WriteRune(r)
+		}
+		if r == '@' || r == ':' {
+			break
+		}
+	}
+	return b.String()
 }
 
 func platforms() []string {

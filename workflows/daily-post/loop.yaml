@@ -1,5 +1,5 @@
 name: daily-post
-version: 1.1.3
+version: 1.2.0
 description: >
   Reads your day — what you built, who you met, what you said, what memory
   knows — and, when the day was worth it, writes one post and publishes it to X
@@ -16,6 +16,7 @@ host:
   - log
   - config
   - trigger
+  - operator_chats
   - summarize
   - recall
   - tool

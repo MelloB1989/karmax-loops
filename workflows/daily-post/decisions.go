@@ -211,6 +211,11 @@ var refusalOpeners = []string{
 	"i'm not able", "i am not able", "i'm unable", "i am unable",
 	"i don't feel comfortable", "i do not feel comfortable",
 	"sorry, i", "i'm sorry", "i apologize", "i apologise",
+	// Not a refusal on principle but the same outcome: the model saying there
+	// is nothing to write from. It arrives when the day really is empty, and it
+	// is not a post.
+	"i don't have any", "i do not have any", "there's nothing", "there is nothing",
+	"the \"what they did today\"", "no information about what",
 }
 
 // dedupeKey is what makes a post recognisable as one already made.
@@ -280,6 +285,27 @@ var common = map[string]bool{
 	"could": true, "just": true, "like": true, "some": true, "into": true,
 	"today": true, "than": true, "your": true, "will": true, "more": true,
 	"most": true, "which": true, "while": true, "still": true,
+}
+
+// isOwnOutput reports whether a message is something KARMAX itself sent.
+//
+// The operator-chat filter catches most of it; this catches the rest, which is
+// anything KARMAX sent to a third party in the operator's name. Neither is the
+// operator's own thinking, and both would otherwise feed a post about the day.
+func isOwnOutput(content string) bool {
+	for _, marker := range ownOutputMarkers {
+		if strings.Contains(content, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+var ownOutputMarkers = []string{
+	"(dry run — nothing was published",
+	"would post to ",
+	"🚫 refused for ",
+	"✅ would post",
 }
 
 // dayKey is the calendar day a run belongs to, used to post once per day.
