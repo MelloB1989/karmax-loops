@@ -12,16 +12,15 @@
 // NO MESSAGE THAT EXPECTS A RESPONSE GOES UNANSWERED: when the harness can't
 // (or shouldn't) reply in the operator's voice — it flagged APPROVE/REMIND, or
 // it failed outright — the loop itself sends a brief assistant note ("Kartik's
-// away; I'm KARMAX, I've notified him") in DMs and group-mentions, rate-limited
-// per chat so the same conversation never gets it twice in a row.
+// away; I'm KARMAX, I've notified him") in DMs and group-mentions — at most one
+// per chat per cooldown, and none at all while the operator is demonstrably
+// present in that chat.
 package main
 
 import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -395,8 +394,23 @@ func monitor() error {
 // rate-limits it: at most one note per chat per awayNoteCooldown. The
 // flag/approval itself still files for every message.
 func sendAwayNote(chatID, who string, incoming string, isGroup bool) {
-	state, path := loadAwayState()
-	if last, ok := state[chatID]; ok && time.Since(time.Unix(last, 0)) < awayNoteCooldown {
+	// Cooldown in short-term memory, not on disk.
+	//
+	// This used to read and write a JSON file under the home directory. The
+	// sandbox has no filesystem — deliberately, "no filesystem, no
+	// environment, no arguments" — so both calls silently did nothing, the
+	// state was empty on every run, and the note went out every time. Nikhil
+	// got three inside sixteen hours, each freshly worded by the composer,
+	// which is also why the send guard did not catch them: it dedupes on the
+	// text, and no two were the same text.
+	if _, sent, _ := loopwasm.ShortGet(chatID, awayNoteKey); sent {
+		return
+	}
+	// The operator is only "away" if they are not, in fact, right here. They
+	// answer from their phone constantly, and an assistant announcing their
+	// absence into a chat they are actively holding is worse than silence.
+	if operatorSpokeRecently(chatID) {
+		loopwasm.Log("wa-monitor: no away-note for %s — the operator is active in this chat", who)
 		return
 	}
 
@@ -422,45 +436,54 @@ func sendAwayNote(chatID, who string, incoming string, isGroup bool) {
 		loopwasm.Log("wa-monitor: away-note compose failed for %s: %v %.80s", who, err, note)
 		return
 	}
-	if err := shared.SendWhatsApp(chatID, truncate(note, 500), ""); err != nil {
-		loopwasm.Log("wa-monitor: away-note to %s failed: %v", who, err)
+	// Claimed BEFORE sending and through the same exit as everything else.
+	// This went out via shared.SendWhatsApp directly, around the guard the
+	// file above calls "the ONLY place a WhatsApp message leaves KARMAX" —
+	// so the one message most likely to repeat was the one message exempt
+	// from the check for repeats.
+	_ = loopwasm.ShortSet(chatID, awayNoteKey, "sent", int(awayNoteCooldown.Seconds()))
+	if err := sendViaWacli(chatID, truncate(note, 500), ""); err != nil {
+		if err != errDuplicateSend {
+			_ = loopwasm.ShortForget(chatID, awayNoteKey)
+			loopwasm.Log("wa-monitor: away-note to %s failed: %v", who, err)
+		}
 		return
 	}
 	loopwasm.Log("wa-monitor: sent away-note to %s", who)
-	state[chatID] = time.Now().Unix()
-	saveAwayState(path, state)
 }
 
-func awayStatePath() string {
-	home, err := os.UserHomeDir()
+// awayNoteKey is the intent, not the wording. One note per chat per cooldown
+// however differently the composer phrases it.
+const awayNoteKey = "away_note"
+
+// operatorSpokeRecently reports whether the operator has said anything in this
+// chat lately — the difference between away and simply not having replied yet.
+func operatorSpokeRecently(chatID string) bool {
+	out, err := loopwasm.Tool("whatsapp_search_messages", map[string]any{
+		"chat": chatID, "from_me": "yes", "limit": 1,
+	})
 	if err != nil {
-		return ""
+		// Unknown is not "away": staying quiet is the recoverable mistake.
+		return true
 	}
-	return filepath.Join(home, ".karmax", "wa-monitor-away.json")
+	var res struct {
+		Messages []struct {
+			Timestamp string `json:"timestamp"`
+		} `json:"messages"`
+	}
+	if json.Unmarshal([]byte(out), &res) != nil || len(res.Messages) == 0 {
+		return false
+	}
+	when, perr := time.Parse(time.RFC3339, res.Messages[0].Timestamp)
+	if perr != nil {
+		return true
+	}
+	return time.Since(when) < operatorPresentWindow
 }
 
-func loadAwayState() (map[string]int64, string) {
-	path := awayStatePath()
-	state := map[string]int64{}
-	if path == "" {
-		return state, path
-	}
-	if b, err := os.ReadFile(path); err == nil {
-		_ = json.Unmarshal(b, &state)
-	}
-	return state, path
-}
-
-func saveAwayState(path string, state map[string]int64) {
-	if path == "" {
-		return
-	}
-	b, err := json.Marshal(state)
-	if err != nil {
-		return
-	}
-	_ = os.WriteFile(path, b, 0o644)
-}
+// operatorPresentWindow is how recently the operator must have spoken in a
+// chat to count as present in it.
+const operatorPresentWindow = 45 * time.Minute
 
 // report routes the harness outcome deterministically and ALWAYS logs the
 // decision (so a "why didn't it act?" is answerable from the journal). Returns
