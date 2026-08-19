@@ -236,3 +236,26 @@ var recallStop = map[string]bool{
 	"could": true, "until": true, "karmax": true, "replying": true, "message": true,
 	"today": true, "tomorrow": true, "going": true, "still": true, "thing": true,
 }
+
+// disclosureReason pulls the KNOWS_KARMAX line out of a model's answer.
+//
+// Separate from the recording so it can be tested without a host: the line
+// arrives amid whatever else the model wrote, sometimes bulleted, sometimes
+// bolded, and getting it wrong in either direction is costly — a miss keeps
+// the impersonation going, a false positive drops the operator's voice with
+// somebody who never questioned it.
+func disclosureReason(modelOutput string) (string, bool) {
+	for _, line := range strings.Split(modelOutput, "\n") {
+		line = strings.TrimSpace(strings.Trim(strings.TrimSpace(line), "-*#> "))
+		if !strings.HasPrefix(strings.ToUpper(line), "KNOWS_KARMAX") {
+			continue
+		}
+		why := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line[len("KNOWS_KARMAX"):]), ":"))
+		why = strings.TrimSpace(strings.Trim(why, "*_"))
+		if why == "" || strings.EqualFold(why, "no") || strings.EqualFold(why, "none") || strings.EqualFold(why, "n/a") {
+			return "", false
+		}
+		return why, true
+	}
+	return "", false
+}

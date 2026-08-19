@@ -194,3 +194,37 @@ func TestRecallQueryCarriesSenderAndSubject(t *testing.T) {
 		t.Errorf("got %q", q)
 	}
 }
+
+func TestDisclosureReasonReadsTheLineTheModelActuallyWrites(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		out  string
+		want string
+	}{
+		{"plain", "KNOWS_KARMAX: this message was sent by your ai right\nACTED: replied", "this message was sent by your ai right"},
+		{"bulleted", "- **KNOWS_KARMAX:** you don't sound like karthik at all\nSKIP: nothing", "you don't sound like karthik at all"},
+		{"lowercase", "knows_karmax: asked if I was a bot", "asked if I was a bot"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := disclosureReason(tc.out)
+			if !ok || got != tc.want {
+				t.Fatalf("disclosureReason() = %q, %v; want %q, true", got, ok, tc.want)
+			}
+		})
+	}
+}
+
+// A message that never questioned who it was talking to must keep the
+// operator's voice: a false positive here outs KARMAX to someone unprompted.
+func TestDisclosureReasonStaysQuietWithoutTheLine(t *testing.T) {
+	for _, out := range []string{
+		"ACTED: replied that the APK is coming tomorrow",
+		"The sender mentioned karmax in passing but not as a question.\nSKIP: chatter",
+		"KNOWS_KARMAX: none\nSKIP: chatter",
+		"KNOWS_KARMAX:\nSKIP: chatter",
+	} {
+		if got, ok := disclosureReason(out); ok {
+			t.Fatalf("disclosureReason(%q) = %q, true; want no disclosure", out, got)
+		}
+	}
+}

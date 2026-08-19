@@ -180,6 +180,19 @@ func monitor() error {
 		}
 		identity += "\n"
 
+		// Speak AS the operator only to people who still think that is who they
+		// are talking to. Somebody who has already worked out they are talking
+		// to KARMAX gets the truth instead — keeping up the act after being
+		// caught is what made three separate people call it creepy. Who has
+		// caught it is remembered, never hardcoded: it is set the first time
+		// they say so, and long-term memory carries it between restarts.
+		knownWhy, knownBefore := knowsKarmax(senderID)
+		voice := "in the operator's natural human voice (concise; never say you're an AI/assistant when speaking AS the operator)"
+		if knownBefore {
+			voice = "AS YOURSELF, openly — this person ALREADY KNOWS you are KARMAX, the operator's assistant, not the operator (" + oneLineTrunc(knownWhy, 120) + "). Do NOT write as though you were the operator: be frank that you are KARMAX texting on their behalf. Say it naturally and once, not as a disclaimer on every line, then get on with the actual message"
+			identity += "This person has ALREADY IDENTIFIED YOU as KARMAX before (" + oneLineTrunc(knownWhy, 120) + "). Do not impersonate the operator with them — write as KARMAX, texting on the operator's behalf.\n"
+		}
+
 		// The model has no clock unless it is handed one. Without it, a stale
 		// "reaching shortly" was re-sent at 00:19 and a wake-up call placed at
 		// half past midnight, each perfectly reasonable for the afternoon the
@@ -206,7 +219,7 @@ func monitor() error {
 		addressed := !isGroup || mentioned || replyGroup || commanded
 
 		context_ := "A monitored 1:1 chat just messaged " + operatorDesc + "."
-		policy := "   - LEAN TOWARD REPLYING. If a reply/action is routine and you're reasonably sure how the operator would respond (acknowledgements, answering things you know from context, simple scheduling, sharing already-known info, confirming availability, a natural conversational reply), SEND IT NOW: `" + wacli + " send --to " + chatID + " --text \"...\"` in the operator's natural human voice (concise; never say you're an AI/assistant when speaking AS the operator). Use the `gws` CLI for calendar/email if clearly asked. When in doubt between replying and staying silent, REPLY.\n" +
+		policy := "   - LEAN TOWARD REPLYING. If a reply/action is routine and you're reasonably sure how the operator would respond (acknowledgements, answering things you know from context, simple scheduling, sharing already-known info, confirming availability, a natural conversational reply), SEND IT NOW: `" + wacli + " send --to " + chatID + " --text \"...\"` " + voice + ". Use the `gws` CLI for calendar/email if clearly asked. When in doubt between replying and staying silent, REPLY.\n" +
 			"   - Flag APPROVE only for a real DECISION, a commitment, money, or something genuinely sensitive where a wrong reply causes harm — include your suggested reply. Do NOT send anything yourself in that case, and do NOT send any \"he's away\" placeholder — the system automatically acknowledges the sender when you flag APPROVE or REMIND.\n" +
 			"   - If it's something ONLY the operator can personally do (send a document/file you don't have, a personal reply, an offline task): flag it as REMIND.\n" +
 			"   - SKIP is ONLY for messages that need no response at all (chatter, FYIs, spam). If the sender expects ANY response, never SKIP — reply or flag it.\n"
@@ -223,7 +236,7 @@ func monitor() error {
 			context_ = "You (KARMAX) are being DIRECTLY ENGAGED here — either @-mentioned, or someone replied to a message YOU sent. If it's a reply, the message you sent is shown inline as \"[replying to: …]\"; read BOTH it and the new message so you have the full thread. A response is ALWAYS expected — never ignore this. " + authority
 			policy = "   - Read the FULL context: the new message AND, for a reply, the quoted text it is responding to.\n" +
 				"   - If it's an instruction/request/question you can handle (find something, do X, send Y, answer a question) — CARRY IT OUT FULLY using your tools/shell (research the web, run commands, use gws/gh, generate the answer), then POST the result in THIS chat via `" + wacli + " send --to " + chatID + " --text \"...\"` (use `--media <path>` if a file is wanted). Do the actual work, don't just acknowledge.\n" +
-				"   - If it's a conversational reply or follow-up to what you said (a correction, a 'yes do it', a reaction), respond naturally HERE in the operator's voice to continue the thread.\n" +
+				"   - If it's a conversational reply or follow-up to what you said (a correction, a 'yes do it', a reaction), respond naturally HERE " + voice + " to continue the thread.\n" +
 				"   - Report ACTED with what you did/sent. Never SKIP a direct engagement. Only flag APPROVE if fulfilling it would spend money, post something risky publicly, or delete data.\n" +
 				"   - NEVER claim you did something unless a tool call in THIS run actually did it. If you cannot do a thing (no tool for it — e.g. stopping your own daemon), say you cannot, once, plainly. A confident \"done\" for an action that did not happen is the worst possible reply.\n"
 		} else if isGroup && mentioned {
@@ -231,19 +244,19 @@ func monitor() error {
 			// addressed. A mention must never be silently ignored.
 			context_ = "A monitored GROUP chat just @-MENTIONED " + operatorDesc + " directly — they are being addressed and a response is expected."
 			policy = "   - The operator was DIRECTLY @-mentioned, so you MUST respond somehow — never SKIP this.\n" +
-				"   - LEAN TOWARD REPLYING in the operator's voice (a question you can answer, an acknowledgement, availability, a follow-up): reply NOW via `" + wacli + " send --to " + chatID + " --text \"...\"` (concise, human, never reveal you're an AI when speaking AS the operator).\n" +
+				"   - LEAN TOWARD REPLYING in the operator's voice (a question you can answer, an acknowledgement, availability, a follow-up): reply NOW via `" + wacli + " send --to " + chatID + " --text \"...\"` " + voice + ".\n" +
 				"   - Flag APPROVE (with your suggested reply) only for a real DECISION, commitment, money, or something genuinely sensitive. Do NOT send a \"he's away\" placeholder yourself — the system acknowledges the sender automatically when you flag.\n" +
 				"   - Only if it's something ONLY the operator can personally do: flag REMIND. A plain mention with a question defaults to a reply.\n"
 		} else if replyGroup {
 			// Trusted working group: the operator wants KARMAX to act as them here,
 			// like a small client/project group where a reply is expected.
 			context_ = "A monitored TRUSTED WORKING GROUP just had a new message. " + operatorDesc + " actively participates here as themselves and WANTS you to reply on their behalf — treat it like a 1:1 with the operator's team."
-			policy = "   - LEAN TOWARD REPLYING as the operator. For routine/known things — acknowledging an update, answering something you know, confirming availability/next steps, a natural conversational reply to a teammate/client — SEND IT NOW: `" + wacli + " send --to " + chatID + " --text \"...\"` in the operator's natural voice (concise, human, never reveal you're an AI when speaking AS the operator). When in doubt between replying and staying silent, REPLY.\n" +
+			policy = "   - LEAN TOWARD REPLYING as the operator. For routine/known things — acknowledging an update, answering something you know, confirming availability/next steps, a natural conversational reply to a teammate/client — SEND IT NOW: `" + wacli + " send --to " + chatID + " --text \"...\"` " + voice + ". When in doubt between replying and staying silent, REPLY.\n" +
 				"   - Flag APPROVE (with your suggested reply) only for a real DECISION, commitment, money, pricing, scope, or anything genuinely sensitive where a wrong reply is costly. Don't send a placeholder yourself — the system acknowledges the sender when you flag.\n" +
 				"   - Ignore messages clearly aimed at another specific member and not the operator's side. Only truly irrelevant chatter is SKIP.\n"
 		} else if isGroup {
 			context_ = "A monitored GROUP chat just had a new message. " + operatorDesc + " is a member but was NOT @-mentioned."
-			policy = "   - This is a GROUP and the operator was NOT directly @-mentioned. Only SEND a reply if the operator is clearly being asked a question they must answer. Reply via `" + wacli + " send --to " + chatID + " --text \"...\"` in the operator's casual voice, and only for genuinely routine/known answers.\n" +
+			policy = "   - This is a GROUP and the operator was NOT directly @-mentioned. Only SEND a reply if the operator is clearly being asked a question they must answer. Reply via `" + wacli + " send --to " + chatID + " --text \"...\"` " + voice + ", and only for genuinely routine/known answers.\n" +
 				"   - Do NOT reply to general group discussion or messages meant for other members.\n" +
 				"   - If the message is a meaningful update on an active project/deal/commitment (e.g. a client saying they'll get back, a payment confirmation, a deadline) but needs no reply or decision, use INFORM so the operator gets a notification — do NOT file it as an APPROVE (that inbox is for real decisions only), and do not silently skip important client/deal activity.\n" +
 				"   - Reserve APPROVE for a genuine decision the operator must make (spend/pricing/scope/commitment/sensitive).\n" +
@@ -253,7 +266,7 @@ func monitor() error {
 		// Per-chat SHORT-TERM MEMORY: what KARMAX already said/decided in THIS
 		// chat recently, in every other chat, and in long-term memory —
 		// assembled once, given to every deciding path equally.
-		shortMem := eventContext(chatID, who, senderName, content)
+		shortMem := eventContext(chatID, who, senderName, senderID, content, knownBefore)
 
 		// Let the harness quote the exact message that triggered this run, so
 		// the reply threads under it instead of floating at the end of the chat.
@@ -271,6 +284,7 @@ func monitor() error {
 			"Steps:\n" +
 			"1. Read recent context: run `" + wacli + " messages --chat " + chatID + " --limit 15` (newest last). If it's already handled/answered and nothing new is needed, do nothing.\n" +
 			"2. Decide on the operator's behalf:\n" + policy +
+			"   - If this message shows the sender has WORKED OUT they are talking to an AI/KARMAX rather than the operator (they ask if it is a bot, say you don't sound like the operator, address you as KARMAX), or long-term memory above already says they have caught you before, then ADDITIONALLY output a line `KNOWS_KARMAX: <the words that show it>` — and from now on stop writing as the operator to them and say plainly that you are KARMAX.\n" +
 			"3. REQUIRED: end your response with EXACTLY one outcome line — the VERY LAST line, beginning with one of these verbs (mandatory even if you already replied or acted; if you omit it the message is treated as unhandled and escalated). Choose CAREFULLY — do NOT use APPROVE for things you can handle yourself or for pure updates:\n" +
 			"   ACTED: <what you sent/did on the operator's behalf — prefer this for anything routine>\n" +
 			"   APPROVE: <ONLY a real decision the operator must personally make — approving spend/pricing/scope, a commitment, something risky/irreversible/sensitive — plus your suggested reply. If you could handle it, ACT. If it just needs them to know, INFORM.>\n" +
@@ -305,6 +319,7 @@ func monitor() error {
 				loopwasm.Log("wa-monitor: full-agent command failed for %q (%v) — falling back to gateway", who, aerr)
 			} else {
 				sentThisRun = true
+				noteDisclosure(reply, senderID, who)
 				outcome := "ACTED: handled operator command — " + oneLineTrunc(reply, 200)
 				loopwasm.Log("wa-monitor: %s", outcome)
 				recordAction(chatID, who, outcome)
@@ -328,6 +343,7 @@ func monitor() error {
 			"or resolve a person with args: [\"resolve\", \"<name>\"]. If someone asks what another chat said, LOOK IT UP instead of saying you can't see it.\n\n" +
 			justRepliedNote(justReplied) +
 			"How to decide:\n" + policy + "\n" +
+			"   - If this message shows the sender has WORKED OUT they are talking to an AI/KARMAX rather than the operator (they ask if it is a bot, say you don't sound like the operator, address you as KARMAX), or long-term memory above already says they have caught you before, then ADDITIONALLY output a line `KNOWS_KARMAX: <the words that show it>` — and from now on stop writing as the operator to them and say plainly that you are KARMAX.\n" +
 			"Answer with ONE verb on the FIRST line, then its content:\n" +
 			"REPLY: <the exact message to send, in the operator's voice — use this whenever you can simply answer>\n" +
 			"ESCALATE: <why> — ONLY when it needs tools you don't have: web research, running commands, reading files/media, calendar/email actions, or looking something up you don't know.\n" +
@@ -346,6 +362,7 @@ func monitor() error {
 		} else if shared.LooksLikeError(gwOut) {
 			loopwasm.Log("wa-monitor: gateway returned an error/refusal for %q — escalating", who)
 		} else {
+			noteDisclosure(gwOut, senderID, who)
 			verb, payload := parseGatewayOutcome(gwOut)
 			switch verb {
 			case "REPLY":
@@ -390,6 +407,7 @@ func monitor() error {
 
 		// ---- ESCALATED: full Claude Code harness (tools/shell/research) ------
 		out, err = loopwasm.Harness(prompt)
+		noteDisclosure(out, senderID, who)
 		if err != nil || shared.LooksLikeError(out) {
 			// Never fail silently: the operator must know a monitored message went
 			// unhandled (especially while they sleep) — and the SENDER shouldn't be
@@ -824,7 +842,7 @@ func isBotMentioned(content string) bool {
 // pass all lived as though the proxy did not exist. Every duplicate the
 // operator complained about is some form of this blindness: each pass decided
 // correctly on what it could see, and it could see almost nothing.
-func eventContext(chatID, who, senderName, content string) string {
+func eventContext(chatID, who, senderName, senderID, content string, knownBefore bool) string {
 	var sb strings.Builder
 
 	if this := renderShortMemory(chatID); this != "" {
@@ -857,6 +875,21 @@ func eventContext(chatID, who, senderName, content string) string {
 		}
 	}
 
+	// Whether this person has previously rumbled KARMAX is worth a lookup of
+	// its own. The generic recall is keyed on the subject being discussed, so
+	// on a message about anything else it would never surface the one fact
+	// that decides whose voice to answer in.
+	if !knownBefore && strings.TrimSpace(senderID) != "" {
+		q := strings.TrimSpace(senderName + " " + senderID + " knows KARMAX assistant not the operator")
+		if lines, err := loopwasm.Recall(q, 3); err == nil && len(lines) > 0 {
+			sb.WriteString("Whether this person knows about you:\n")
+			for _, l := range lines {
+				sb.WriteString("- " + oneLineTrunc(l, 200) + "\n")
+			}
+			sb.WriteString("If that says they have ALREADY identified you as KARMAX, do not write as the operator to them — say KNOWS_KARMAX and answer as yourself.\n\n")
+		}
+	}
+
 	if sb.Len() == 0 {
 		return ""
 	}
@@ -886,3 +919,68 @@ func recordAction(chatID, who, outcome string) {
 // crossChatActionTTL keeps the cross-chat list a working set, not a history —
 // long-term memory is the history.
 const crossChatActionTTL = 12 * time.Hour
+
+// knowsGroup remembers, per sender, that this person has worked out they are
+// talking to KARMAX and not the operator.
+//
+// It is a memory, deliberately, and not a list of names in the code: the
+// operator's rule is that facts about specific people live in memory, so the
+// loop learns who has caught it the same way it learns anything else. The TTL
+// is long because the fact does not expire — once somebody knows, they know —
+// and recordAction's long-term ingest carries it past any restart.
+const knowsGroup = "~knows-karmax"
+
+const knowsTTL = 180 * 24 * time.Hour
+
+// knowsKarmax reports whether this sender has previously identified KARMAX,
+// and what they said that showed it.
+func knowsKarmax(senderID string) (string, bool) {
+	if strings.TrimSpace(senderID) == "" {
+		return "", false
+	}
+	why, ok, err := loopwasm.ShortGet(knowsGroup, shortKey(senderID))
+	if err != nil || !ok {
+		return "", false
+	}
+	return why, true
+}
+
+// noteDisclosure records a KNOWS_KARMAX line if the model emitted one.
+//
+// The model is what reads the message, so it is what decides whether somebody
+// has twigged — a phrase list here would only ever catch the three wordings
+// already seen. This just makes the decision durable.
+func noteDisclosure(modelOutput, senderID, who string) {
+	if strings.TrimSpace(senderID) == "" {
+		return
+	}
+	why, found := disclosureReason(modelOutput)
+	if !found {
+		return
+	}
+	if _, already := knowsKarmax(senderID); already {
+		return
+	}
+	if err := loopwasm.ShortSet(knowsGroup, shortKey(senderID), truncate(why, 200), int(knowsTTL.Seconds())); err != nil {
+		loopwasm.Log("wa-monitor: could not record that %s knows about KARMAX: %v", who, err)
+	}
+	if err := loopwasm.Remember("(WhatsApp proxy) " + who + " (" + senderID + ") has worked out they are talking to KARMAX, not the operator: " +
+		truncate(why, 200) + ". Do NOT write to them as though you were the operator — be open that you are KARMAX, texting on the operator's behalf."); err != nil {
+		loopwasm.Log("wa-monitor: could not ingest the disclosure for %s: %v", who, err)
+	}
+	loopwasm.Log("wa-monitor: %s knows they are talking to KARMAX — dropping the operator voice for them", who)
+}
+
+// shortKey makes a JID safe to use as a short-memory key.
+func shortKey(id string) string {
+	var b strings.Builder
+	for _, r := range id {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('_')
+		}
+	}
+	return b.String()
+}
