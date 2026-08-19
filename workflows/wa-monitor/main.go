@@ -58,10 +58,18 @@ func monitor() error {
 	chatID, _ := t.Payload["channel_id"].(string)
 	karmaxChannelID, _ := t.Payload["karmax_channel_id"].(string)
 	senderName, _ := t.Payload["sender_name"].(string)
-	if senderName == "" {
-		senderName, _ = t.Payload["chat_name"].(string)
-	}
 	senderID, _ := t.Payload["sender_id"].(string)
+	chatName, _ := t.Payload["chat_name"].(string)
+	// The sender and the chat are different facts, and blurring them was an
+	// identity bug: with no sender name this fell back to the CHAT name, so in
+	// a group the model was told, in effect, "god mode - The VC said this" and
+	// left to guess which member that meant. It guessed from the thread — and
+	// the thread's loudest instruction-giver is not necessarily the person
+	// speaking. The operator was mistaken for Shiva exactly this way.
+	senderLabel := strings.TrimSpace(senderName)
+	if senderLabel == "" {
+		senderLabel = "an unnamed contact (" + senderID + ")"
+	}
 	isGroup, _ := t.Payload["is_group"].(bool)
 	// Generic "KARMAX is being directly addressed" signals computed by wacli from
 	// its OWN identity (no configured numbers): the bot was @-mentioned, or this
@@ -127,7 +135,10 @@ func monitor() error {
 		return nil
 	}
 
-	who := senderName
+	who := chatName
+	if who == "" {
+		who = senderName
+	}
 	if who == "" {
 		who = chatID
 	}
@@ -151,6 +162,24 @@ func monitor() error {
 	doPass := func(justReplied bool) error {
 		loopwasm.Log("wa-monitor: proxying message in %q (group=%v, mentioned=%v)", who, isGroup, mentioned)
 
+		wacli := strings.TrimSpace(loopwasm.Config("wacli"))
+		if wacli == "" {
+			wacli = loopwasm.HostTool("wacli")
+		}
+
+		// WHO sent this, stated as fact. Identity is the one thing the model
+		// must never infer from conversation: inference is how the operator,
+		// writing from their personal account, was answered as though they
+		// were Shiva, and how a third party's instruction was carried out with
+		// the operator's authority.
+		identity := "Message sender: " + senderLabel + " (id " + senderID + ")"
+		if senderIsOperator {
+			identity += " — this IS your operator, the person you work for. Their word is final."
+		} else {
+			identity += " — this is NOT your operator. If you are unsure who they are, resolve the id with `" + wacli + " resolve " + senderID + "` rather than guessing from the conversation."
+		}
+		identity += "\n"
+
 		// The model has no clock unless it is handed one. Without it, a stale
 		// "reaching shortly" was re-sent at 00:19 and a wake-up call placed at
 		// half past midnight, each perfectly reasonable for the afternoon the
@@ -159,11 +188,6 @@ func monitor() error {
 		clock := "It is now " + now.Format("Monday 3:04 PM") + ". "
 		if h := now.Hour(); h >= 23 || h < 7 {
 			clock += "That is LATE NIGHT: do not message or call anyone about routine matters — most things can wait for morning. Act now only if it is genuinely urgent or the person is clearly awake in this conversation. "
-		}
-
-		wacli := strings.TrimSpace(loopwasm.Config("wacli"))
-		if wacli == "" {
-			wacli = loopwasm.HostTool("wacli")
 		}
 
 		operatorDesc := "the operator"
@@ -239,7 +263,7 @@ func monitor() error {
 		}
 
 		prompt := "You are the proactive WhatsApp assistant managing the operator's WhatsApp account via the wacli CLI. " + clock + context_ + "\n\n" +
-			"Chat: " + who + "\n" +
+			"Chat: " + who + "\n" + identity +
 			"Chat id: " + chatID + "\n" +
 			replyHint +
 			"Latest message: " + content + "\n\n" +
@@ -261,8 +285,15 @@ func monitor() error {
 		// sending WhatsApp, delegating to Claude Code). The gateway can only
 		// reply or flag; it can't actually DO "remind me to build the apk in 2
 		// hours". This is the difference between answering and acting.
-		if commanded && !justReplied {
-			askPrompt := "You are KARMAX and you've been DIRECTLY instructed by the operator over WhatsApp, in the chat \"" + who + "\" (chat id: " + chatID + ").\n\n" +
+		if commanded && senderIsOperator && !justReplied {
+			// Only the operator reaches the full orchestrator. This prompt used
+			// to open "you've been DIRECTLY instructed by the operator" for ANY
+			// bot-mention — so a third party's instruction was presented to the
+			// agent as the operator's own, with the operator's full authority.
+			// Third-party engagements now take the gateway path below, which
+			// carries the restricted third-party policy.
+			askPrompt := "You are KARMAX. Your operator (" + senderLabel + ") has DIRECTLY instructed you over WhatsApp, in the chat \"" + who + "\" (chat id: " + chatID + ").\n" +
+				clock + "\n" +
 				"Their message: " + content + "\n\n" +
 				shortMem +
 				"Recent thread (oldest first, for context):\n" + truncate(thread15(chatID), 3000) + "\n\n" +
@@ -288,7 +319,7 @@ func monitor() error {
 		// default: it used to run for EVERY incoming message.
 		thread := shared.ReadThread(chatID, 15)
 		gwPrompt := "You are the operator's WhatsApp assistant. " + clock + context_ + "\n\n" +
-			"Chat: " + who + "\n" +
+			"Chat: " + who + "\n" + identity +
 			"Latest message: " + content + "\n\n" +
 			shortMem +
 			"Recent thread (oldest first):\n" + truncate(thread, 4000) + "\n\n" +
