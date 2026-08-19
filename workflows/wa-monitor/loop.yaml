@@ -1,5 +1,5 @@
 name: wa-monitor
-version: "1.2.0"
+version: "1.3.0"
 description: >
   The proactive WhatsApp proxy. Reacts to incoming messages in monitored chats,
   answers what it confidently can in the operator's voice, and escalates
@@ -25,6 +25,8 @@ host:
   - short_get
   - short_all
   - operator_chats
+  - recall
+  - remember
 
 # The one loop that can send as the operator, and the reason a capability list
 # is worth reading before installing anything.
@@ -43,3 +45,5 @@ capabilities:
   - tool:reminder.add
   - memory:nexus
   - memory:nexus:write
+  - memory:nexus
+  - memory:nexus:write:write

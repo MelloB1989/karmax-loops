@@ -211,3 +211,28 @@ func (g *chatGate) release() bool {
 	g.running = false
 	return false
 }
+
+// recallQuery picks the words worth searching memory for: the sender's first
+// name and the message's distinctive words.
+func recallQuery(senderName, content string) string {
+	words := []string{}
+	if f := strings.Fields(senderName); len(f) > 0 && len(f[0]) >= 3 {
+		words = append(words, f[0])
+	}
+	for _, w := range strings.Fields(content) {
+		w = strings.Trim(strings.ToLower(w), ".,!?()[]\"'@:;")
+		if len(w) >= 5 && !recallStop[w] {
+			words = append(words, w)
+			if len(words) >= 5 {
+				break
+			}
+		}
+	}
+	return strings.Join(words, " ")
+}
+
+var recallStop = map[string]bool{
+	"about": true, "there": true, "please": true, "should": true, "would": true,
+	"could": true, "until": true, "karmax": true, "replying": true, "message": true,
+	"today": true, "tomorrow": true, "going": true, "still": true, "thing": true,
+}

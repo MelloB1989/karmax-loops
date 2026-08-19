@@ -173,3 +173,24 @@ func TestNormalisationCatchesRephrasedDuplicates(t *testing.T) {
 		t.Error("two genuinely different messages normalised together")
 	}
 }
+
+// The recall query is what connects an event to what memory knows. It must
+// carry the sender and the subject, not the filler — a query of stopwords
+// retrieves everything and therefore nothing.
+func TestRecallQueryCarriesSenderAndSubject(t *testing.T) {
+	q := recallQuery("Shiva Charan", "@229896781574324 karmax call kartik until he responds")
+	if !strings.Contains(q, "Shiva") {
+		t.Errorf("the sender's name must be in the query, got %q", q)
+	}
+	if !strings.Contains(q, "kartik") {
+		t.Errorf("the subject must be in the query, got %q", q)
+	}
+	if strings.Contains(q, "karmax") || strings.Contains(q, "until") {
+		t.Errorf("filler words retrieve nothing, got %q", q)
+	}
+	// No sender, short message: still something rather than empty when a
+	// distinctive word exists.
+	if q := recallQuery("", "tailscale is down again"); !strings.Contains(q, "tailscale") {
+		t.Errorf("got %q", q)
+	}
+}

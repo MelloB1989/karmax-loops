@@ -227,9 +227,9 @@ func monitor() error {
 		}
 
 		// Per-chat SHORT-TERM MEMORY: what KARMAX already said/decided in THIS
-		// chat recently, rendered straight into the prompt so the harness has
-		// continuity and doesn't re-answer something it just handled.
-		shortMem := renderShortMemory(chatID)
+		// chat recently, in every other chat, and in long-term memory —
+		// assembled once, given to every deciding path equally.
+		shortMem := eventContext(chatID, who, senderName, content)
 
 		// Let the harness quote the exact message that triggered this run, so
 		// the reply threads under it instead of floating at the end of the chat.
@@ -264,6 +264,7 @@ func monitor() error {
 		if commanded && !justReplied {
 			askPrompt := "You are KARMAX and you've been DIRECTLY instructed by the operator over WhatsApp, in the chat \"" + who + "\" (chat id: " + chatID + ").\n\n" +
 				"Their message: " + content + "\n\n" +
+				shortMem +
 				"Recent thread (oldest first, for context):\n" + truncate(thread15(chatID), 3000) + "\n\n" +
 				"CARRY OUT the instruction using your tools — set the reminder / calendar event / schedule, look things up, research, whatever it asks (for a relative time like \"in 2 hours\" compute the absolute time from now). If it's just conversation, simply answer.\n" +
 				"If you genuinely CANNOT do it because you're missing information (you don't have the credentials/file/detail it needs, or it's not in memory), do NOT go silent or say a vague \"standing by\" — reply in the chat stating plainly what's blocking you and asking for the one specific thing you need.\n" +
@@ -275,7 +276,7 @@ func monitor() error {
 				sentThisRun = true
 				outcome := "ACTED: handled operator command — " + oneLineTrunc(reply, 200)
 				loopwasm.Log("wa-monitor: %s", outcome)
-				_ = loopwasm.ShortSet(chatID, "did_"+time.Now().UTC().Format("150405"), truncate(outcome, 300), int(shortMemoryTTL.Seconds()))
+				recordAction(chatID, who, outcome)
 				return nil
 			}
 		}
@@ -348,7 +349,7 @@ func monitor() error {
 		if !escalate {
 			kind := report(who, outcome)
 			if kind == "acted" || kind == "inform" {
-				_ = loopwasm.ShortSet(chatID, "did_"+time.Now().UTC().Format("150405"), truncate(outcome, 300), int(shortMemoryTTL.Seconds()))
+				recordAction(chatID, who, outcome)
 			}
 			if addressed && (kind == "approve" || kind == "remind") {
 				sendAwayNote(chatID, who, content, isGroup)
@@ -377,7 +378,7 @@ func monitor() error {
 		// self-expiring), so the next message in the thread carries the context
 		// and KARMAX doesn't repeat itself.
 		if kind == "acted" || kind == "inform" {
-			_ = loopwasm.ShortSet(chatID, "did_"+time.Now().UTC().Format("150405"), truncate(outcome, 300), int(shortMemoryTTL.Seconds()))
+			recordAction(chatID, who, outcome)
 		}
 
 		// A monitored message must NEVER silently vanish. If the harness produced no
@@ -780,3 +781,77 @@ func main() {}
 func isBotMentioned(content string) bool {
 	return mentionsAnyID(content, loopwasm.Config("bot_mentions"))
 }
+
+// What the model must know before it decides anything: what has already been
+// done — in this chat, in every other chat, and in long-term memory.
+//
+// The proxy's continuity used to be per-chat short notes with a TTL, and the
+// commanded path did not even get those. So an action taken because of a group
+// instruction was invisible when the next event arrived in a DM, an action
+// older than the TTL was invisible everywhere, and nothing the proxy ever did
+// reached long-term memory — the orchestrator, the voice brain and the review
+// pass all lived as though the proxy did not exist. Every duplicate the
+// operator complained about is some form of this blindness: each pass decided
+// correctly on what it could see, and it could see almost nothing.
+func eventContext(chatID, who, senderName, content string) string {
+	var sb strings.Builder
+
+	if this := renderShortMemory(chatID); this != "" {
+		sb.WriteString(this)
+	}
+
+	// Actions taken ANYWHERE recently, because instructions and their effects
+	// cross chats: "call Kartik" arrives in a group, the call happens in a DM.
+	if entries, err := loopwasm.ShortAll(actionsGroup); err == nil && len(entries) > 0 {
+		sb.WriteString("Actions you took recently in ANY chat (newest first — do not redo these):\n")
+		for i := len(entries) - 1; i >= 0 && len(entries)-i <= 8; i-- {
+			sb.WriteString("- " + oneLineTrunc(entries[i].Value, 200) + "\n")
+		}
+		sb.WriteString("\n")
+	}
+
+	// Long-term memory about this sender and subject. Recall failure is
+	// tolerated — a message must still be answerable when the memory backend
+	// is down — but silently, never invisibly: the model is told it is
+	// deciding without memory rather than left to assume there is none.
+	if q := recallQuery(senderName, content); q != "" {
+		if lines, err := loopwasm.Recall(q, 6); err != nil {
+			sb.WriteString("(Long-term memory is unreachable right now — you are deciding without it.)\n\n")
+		} else if len(lines) > 0 {
+			sb.WriteString("What long-term memory holds about this sender/subject:\n")
+			for _, l := range lines {
+				sb.WriteString("- " + oneLineTrunc(l, 200) + "\n")
+			}
+			sb.WriteString("\n")
+		}
+	}
+
+	if sb.Len() == 0 {
+		return ""
+	}
+	return "── What you already know ──\n" + sb.String() +
+		"Weigh all of the above BEFORE deciding. If this request — or one meaning the same thing — " +
+		"has already been handled, do not redo it: say only what is genuinely new, or skip.\n\n"
+}
+
+// actionsGroup is the cross-chat short-memory group every action is noted in.
+const actionsGroup = "~actions"
+
+// recordAction is the ONE place an outcome is written down, in all three
+// places a future decision might look: this chat's notes, the cross-chat
+// action list, and long-term memory. Ingesting long-term is what finally lets
+// the rest of KARMAX — the orchestrator, a phone call, the review pass — know
+// what its own proxy has been doing.
+func recordAction(chatID, who, outcome string) {
+	key := "did_" + time.Now().UTC().Format("150405")
+	_ = loopwasm.ShortSet(chatID, key, truncate(outcome, 300), int(shortMemoryTTL.Seconds()))
+	_ = loopwasm.ShortSet(actionsGroup, key, truncate(who+" — "+outcome, 300), int(crossChatActionTTL.Seconds()))
+	if err := loopwasm.Remember("(WhatsApp proxy, " + time.Now().Format("2 Jan 15:04") + ") In " +
+		who + ": " + truncate(outcome, 400)); err != nil {
+		loopwasm.Log("wa-monitor: could not ingest the action into memory: %v", err)
+	}
+}
+
+// crossChatActionTTL keeps the cross-chat list a working set, not a history —
+// long-term memory is the history.
+const crossChatActionTTL = 12 * time.Hour
