@@ -372,8 +372,15 @@ func QueueScanSends(lines []string, why string) (queued int, unparsed []string) 
 			unparsed = append(unparsed, line)
 			continue
 		}
+		// A draft that parsed but could not be queued is a different failure
+		// from one the model wrote badly, and saying so matters: chat-sweep
+		// lacked the short_set capability, so every well-formed draft failed
+		// here and was reported to the operator as "no chat id" — with the
+		// chat id printed in the line underneath. The error was dropped, so
+		// nothing anywhere named the real cause.
 		if err := QueueSend(chat, text, why); err != nil {
-			unparsed = append(unparsed, line)
+			loopwasm.Log("could not queue a drafted reply to %s: %v", chat, err)
+			unparsed = append(unparsed, line+"  [could not queue: "+err.Error()+"]")
 			continue
 		}
 		queued++

@@ -123,7 +123,7 @@ func sweep() error {
 	// worth writing, and silently discarding it looks identical to never having
 	// thought of it.
 	if len(unparsed) > 0 {
-		shared.InformItems("Drafted but not sendable (no chat id)", unparsed)
+		shared.InformItems("Drafted but not queued — see the reason on each line", unparsed)
 	}
 	shared.ProposeItems("Flagged by the chat-sweep loop while reviewing monitored WhatsApp chats.", approve)
 	shared.RemindItems("Flagged by the chat-sweep loop: only you can do this one.", remind)

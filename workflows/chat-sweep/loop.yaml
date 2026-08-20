@@ -1,5 +1,5 @@
 name: chat-sweep
-version: "1.1.0"
+version: "1.2.0"
 description: >
   Reviews the monitored WhatsApp chats for pending items — unanswered questions,
   promised actions, approaching deadlines — and acts on the operator's behalf or
@@ -20,6 +20,7 @@ host:
   - tool
   - remember
   - short_all
+  - short_set
   - chat_summary_get
   - chat_summary_save
 
