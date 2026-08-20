@@ -228,3 +228,24 @@ func TestDisclosureReasonStaysQuietWithoutTheLine(t *testing.T) {
 		}
 	}
 }
+
+func TestBroadcastFeedsAreNotConversations(t *testing.T) {
+	for _, id := range []string{
+		"120363169975121665@newsletter",
+		"status@broadcast",
+		"120363422879965343@NEWSLETTER",
+	} {
+		if !isBroadcastFeed(id) {
+			t.Errorf("isBroadcastFeed(%q) = false; want true — replying here reaches nobody", id)
+		}
+	}
+	for _, id := range []string{
+		"919652162459@s.whatsapp.net",
+		"120363169975121665@g.us",
+		"148292419731593@lid",
+	} {
+		if isBroadcastFeed(id) {
+			t.Errorf("isBroadcastFeed(%q) = true; want false — this is a real chat", id)
+		}
+	}
+}

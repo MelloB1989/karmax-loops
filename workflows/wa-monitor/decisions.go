@@ -259,3 +259,15 @@ func disclosureReason(modelOutput string) (string, bool) {
 	}
 	return "", false
 }
+
+// isBroadcastFeed reports a JID that publishes AT the operator rather than
+// talking to them: WhatsApp channels/newsletters and the status feed.
+//
+// Both are delivered as normal incoming messages and neither is marked as a
+// group, so without this they look exactly like a DM worth answering.
+func isBroadcastFeed(chatID string) bool {
+	id := strings.ToLower(strings.TrimSpace(chatID))
+	return strings.HasSuffix(id, "@newsletter") ||
+		strings.HasSuffix(id, "@broadcast") ||
+		strings.HasSuffix(id, "@status")
+}

@@ -129,6 +129,17 @@ func monitor() error {
 		return nil
 	}
 
+	// A broadcast feed is not a conversation. Newsletters and status updates
+	// arrive as ordinary messages and read as 1:1 chats — is_group is false —
+	// so the loop composed a reply to a WhatsApp channel, sent it into a place
+	// subscribers cannot post, and reported "Handled" to the operator for a
+	// message nobody received. This is a property of the JID namespace rather
+	// than anything about a particular chat, so it is decided here.
+	if isBroadcastFeed(chatID) {
+		loopwasm.Log("wa-monitor: ignoring %q — a broadcast feed, not a conversation", chatID)
+		return nil
+	}
+
 	// Skip trivial acks (save tokens) and non-chat events — but NEVER skip a
 	// message that @-mentions the operator/KARMAX or lands in a reply group.
 	if karmaxChannelID == "" || (!mentioned && !replyGroup && !commanded && isTrivial(content)) {
