@@ -230,7 +230,8 @@ func monitor() error {
 		addressed := !isGroup || mentioned || replyGroup || commanded
 
 		context_ := "A monitored 1:1 chat just messaged " + operatorDesc + "."
-		policy := "   - LEAN TOWARD REPLYING. If a reply/action is routine and you're reasonably sure how the operator would respond (acknowledgements, answering things you know from context, simple scheduling, sharing already-known info, confirming availability, a natural conversational reply), SEND IT NOW: `" + wacli + " send --to " + chatID + " --text \"...\"` " + voice + ". Use the `gws` CLI for calendar/email if clearly asked. When in doubt between replying and staying silent, REPLY.\n" +
+		sendHint := "using your whatsapp_send_message tool (chat: " + chatID + ") with a message that is ONLY the reply text itself — never a shell command, `" + wacli + "` invocation, or CLI syntax of any kind"
+		policy := "   - LEAN TOWARD REPLYING. If a reply/action is routine and you're reasonably sure how the operator would respond (acknowledgements, answering things you know from context, simple scheduling, sharing already-known info, confirming availability, a natural conversational reply), SEND IT NOW " + sendHint + " " + voice + ". Use the `gws` CLI for calendar/email if clearly asked. When in doubt between replying and staying silent, REPLY.\n" +
 			"   - Flag APPROVE only for a real DECISION, a commitment, money, or something genuinely sensitive where a wrong reply causes harm — include your suggested reply. Do NOT send anything yourself in that case, and do NOT send any \"he's away\" placeholder — the system automatically acknowledges the sender when you flag APPROVE or REMIND.\n" +
 			"   - If it's something ONLY the operator can personally do (send a document/file you don't have, a personal reply, an offline task): flag it as REMIND.\n" +
 			"   - SKIP is ONLY for messages that need no response at all (chatter, FYIs, spam). If the sender expects ANY response, never SKIP — reply or flag it.\n"
@@ -246,7 +247,7 @@ func monitor() error {
 			}
 			context_ = "You (KARMAX) are being DIRECTLY ENGAGED here — either @-mentioned, or someone replied to a message YOU sent. If it's a reply, the message you sent is shown inline as \"[replying to: …]\"; read BOTH it and the new message so you have the full thread. A response is ALWAYS expected — never ignore this. " + authority
 			policy = "   - Read the FULL context: the new message AND, for a reply, the quoted text it is responding to.\n" +
-				"   - If it's an instruction/request/question you can handle (find something, do X, send Y, answer a question) — CARRY IT OUT FULLY using your tools/shell (research the web, run commands, use gws/gh, generate the answer), then POST the result in THIS chat via `" + wacli + " send --to " + chatID + " --text \"...\"` (use `--media <path>` if a file is wanted). Do the actual work, don't just acknowledge.\n" +
+				"   - If it's an instruction/request/question you can handle (find something, do X, send Y, answer a question) — CARRY IT OUT FULLY using your tools/shell (research the web, run commands, use gws/gh, generate the answer), then POST the result in THIS chat " + sendHint + " (attach media via the tool's media parameter if a file is wanted). Do the actual work, don't just acknowledge.\n" +
 				"   - If it's a conversational reply or follow-up to what you said (a correction, a 'yes do it', a reaction), respond naturally HERE " + voice + " to continue the thread.\n" +
 				"   - Report ACTED with what you did/sent. Never SKIP a direct engagement. Only flag APPROVE if fulfilling it would spend money, post something risky publicly, or delete data.\n" +
 				"   - NEVER claim you did something unless a tool call in THIS run actually did it. If you cannot do a thing (no tool for it — e.g. stopping your own daemon), say you cannot, once, plainly. A confident \"done\" for an action that did not happen is the worst possible reply.\n"
@@ -255,19 +256,19 @@ func monitor() error {
 			// addressed. A mention must never be silently ignored.
 			context_ = "A monitored GROUP chat just @-MENTIONED " + operatorDesc + " directly — they are being addressed and a response is expected."
 			policy = "   - The operator was DIRECTLY @-mentioned, so you MUST respond somehow — never SKIP this.\n" +
-				"   - LEAN TOWARD REPLYING in the operator's voice (a question you can answer, an acknowledgement, availability, a follow-up): reply NOW via `" + wacli + " send --to " + chatID + " --text \"...\"` " + voice + ".\n" +
+				"   - LEAN TOWARD REPLYING in the operator's voice (a question you can answer, an acknowledgement, availability, a follow-up): reply NOW " + sendHint + " " + voice + ".\n" +
 				"   - Flag APPROVE (with your suggested reply) only for a real DECISION, commitment, money, or something genuinely sensitive. Do NOT send a \"he's away\" placeholder yourself — the system acknowledges the sender automatically when you flag.\n" +
 				"   - Only if it's something ONLY the operator can personally do: flag REMIND. A plain mention with a question defaults to a reply.\n"
 		} else if replyGroup {
 			// Trusted working group: the operator wants KARMAX to act as them here,
 			// like a small client/project group where a reply is expected.
 			context_ = "A monitored TRUSTED WORKING GROUP just had a new message. " + operatorDesc + " actively participates here as themselves and WANTS you to reply on their behalf — treat it like a 1:1 with the operator's team."
-			policy = "   - LEAN TOWARD REPLYING as the operator. For routine/known things — acknowledging an update, answering something you know, confirming availability/next steps, a natural conversational reply to a teammate/client — SEND IT NOW: `" + wacli + " send --to " + chatID + " --text \"...\"` " + voice + ". When in doubt between replying and staying silent, REPLY.\n" +
+			policy = "   - LEAN TOWARD REPLYING as the operator. For routine/known things — acknowledging an update, answering something you know, confirming availability/next steps, a natural conversational reply to a teammate/client — SEND IT NOW " + sendHint + " " + voice + ". When in doubt between replying and staying silent, REPLY.\n" +
 				"   - Flag APPROVE (with your suggested reply) only for a real DECISION, commitment, money, pricing, scope, or anything genuinely sensitive where a wrong reply is costly. Don't send a placeholder yourself — the system acknowledges the sender when you flag.\n" +
 				"   - Ignore messages clearly aimed at another specific member and not the operator's side. Only truly irrelevant chatter is SKIP.\n"
 		} else if isGroup {
 			context_ = "A monitored GROUP chat just had a new message. " + operatorDesc + " is a member but was NOT @-mentioned."
-			policy = "   - This is a GROUP and the operator was NOT directly @-mentioned. Only SEND a reply if the operator is clearly being asked a question they must answer. Reply via `" + wacli + " send --to " + chatID + " --text \"...\"` " + voice + ", and only for genuinely routine/known answers.\n" +
+			policy = "   - This is a GROUP and the operator was NOT directly @-mentioned. Only SEND a reply if the operator is clearly being asked a question they must answer. Reply " + sendHint + " " + voice + ", and only for genuinely routine/known answers.\n" +
 				"   - Do NOT reply to general group discussion or messages meant for other members.\n" +
 				"   - If the message is a meaningful update on an active project/deal/commitment (e.g. a client saying they'll get back, a payment confirmation, a deadline) but needs no reply or decision, use INFORM so the operator gets a notification — do NOT file it as an APPROVE (that inbox is for real decisions only), and do not silently skip important client/deal activity.\n" +
 				"   - Reserve APPROVE for a genuine decision the operator must make (spend/pricing/scope/commitment/sensitive).\n" +
@@ -324,7 +325,8 @@ func monitor() error {
 				"Recent thread (oldest first, for context):\n" + truncate(thread15(chatID), 3000) + "\n\n" +
 				"CARRY OUT the instruction using your tools — set the reminder / calendar event / schedule, look things up, research, whatever it asks (for a relative time like \"in 2 hours\" compute the absolute time from now). If it's just conversation, simply answer.\n" +
 				"If you genuinely CANNOT do it because you're missing information (you don't have the credentials/file/detail it needs, or it's not in memory), do NOT go silent or say a vague \"standing by\" — reply in the chat stating plainly what's blocking you and asking for the one specific thing you need.\n" +
-				"THEN reply IN THAT CHAT so the operator (and the group) can see it was done, by sending: `" + wacli + " send --to " + chatID + " --text \"...\"`" + replyToArg(triggerMsgID) + " — concise, in the operator's voice. Confirm exactly what you did (e.g. \"done, reminder set for 1:35am\").\n" +
+				"THEN reply IN THAT CHAT so the operator (and the group) can see it was done: use your whatsapp_send_message tool with chat \"" + chatID + "\" and a message that is ONLY the human-readable reply text itself" + replyToArg(triggerMsgID) + " — concise, in the operator's voice. Confirm exactly what you did (e.g. \"done, reminder set for 1:35am\").\n" +
+				"CRITICAL: the message you send must contain ONLY that reply text. Never include a shell command, `" + wacli + "` invocation, CLI flags, or any code/syntax in the message itself — those are for you to run, not for the recipient to read. If you use a shell/exec tool to run `" + wacli + " send ...` directly, that is fine too, but the --text value must be the plain reply, never the command line that sends it.\n" +
 				"Do NOT reply to your own previous messages; only act on THIS instruction."
 			if reply, aerr := loopwasm.Ask(askPrompt); aerr != nil {
 				loopwasm.Log("wa-monitor: full-agent command failed for %q (%v) — falling back to gateway", who, aerr)
