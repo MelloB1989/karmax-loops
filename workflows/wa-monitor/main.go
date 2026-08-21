@@ -223,11 +223,12 @@ func monitor() error {
 			operatorDesc = "the operator (their own numbers/JIDs: " + strings.Join(ids, ", ") + ")"
 		}
 
-		// addressed = someone is talking TO the operator and expects a response
-		// (any DM, a group @-mention, or a trusted reply-group where the operator
-		// acts as themselves). These must never end in silence: either the harness
-		// replies, or the loop sends the assistant away-note below.
-		addressed := !isGroup || mentioned || replyGroup || commanded
+		// addressed = somebody is talking TO KARMAX and expects KARMAX to answer.
+		// A group tag of the OPERATOR is deliberately NOT in this set: it is
+		// addressed to a person who is present, and the automatic away-note that
+		// fires for unanswered addressed messages was part of what made those
+		// mentions read as an absent human with a bot standing in.
+		addressed := answersInChat(isGroup, mentioned, replyGroup, commanded)
 
 		context_ := "A monitored 1:1 chat just messaged " + operatorDesc + "."
 		policy := "   - LEAN TOWARD REPLYING. If a reply/action is routine and you're reasonably sure how the operator would respond (acknowledgements, answering things you know from context, simple scheduling, sharing already-known info, confirming availability, a natural conversational reply), SEND IT NOW: `" + wacli + " send --to " + chatID + " --text \"...\"` " + voice + ". Use the `gws` CLI for calendar/email if clearly asked. When in doubt between replying and staying silent, REPLY.\n" +
@@ -251,13 +252,26 @@ func monitor() error {
 				"   - Report ACTED with what you did/sent. Never SKIP a direct engagement. Only flag APPROVE if fulfilling it would spend money, post something risky publicly, or delete data.\n" +
 				"   - NEVER claim you did something unless a tool call in THIS run actually did it. If you cannot do a thing (no tool for it — e.g. stopping your own daemon), say you cannot, once, plainly. A confident \"done\" for an action that did not happen is the worst possible reply.\n"
 		} else if isGroup && mentioned {
-			// The operator was DIRECTLY @-mentioned — they are unambiguously being
-			// addressed. A mention must never be silently ignored.
-			context_ = "A monitored GROUP chat just @-MENTIONED " + operatorDesc + " directly — they are being addressed and a response is expected."
-			policy = "   - The operator was DIRECTLY @-mentioned, so you MUST respond somehow — never SKIP this.\n" +
-				"   - LEAN TOWARD REPLYING in the operator's voice (a question you can answer, an acknowledgement, availability, a follow-up): reply NOW via `" + wacli + " send --to " + chatID + " --text \"...\"` " + voice + ".\n" +
-				"   - Flag APPROVE (with your suggested reply) only for a real DECISION, commitment, money, or something genuinely sensitive. Do NOT send a \"he's away\" placeholder yourself — the system acknowledges the sender automatically when you flag.\n" +
-				"   - Only if it's something ONLY the operator can personally do: flag REMIND. A plain mention with a question defaults to a reply.\n"
+			// Somebody tagged the OPERATOR in a group. That is a question for a
+			// person who is standing right there, not an instruction to KARMAX.
+			//
+			// This used to force a reply — "you MUST respond somehow, never SKIP"
+			// — and it read exactly as badly as it sounds. Tagged in a group, the
+			// answer went out in the operator's voice within eleven seconds; the
+			// operator answered the same question himself forty-five seconds
+			// later. The person who had tagged him asked for the number to be
+			// removed from the group: "causing misunderstandings", "it doesn't
+			// feel professional".
+			//
+			// Being addressed is not the same as being spoken to. KARMAX answers
+			// when KARMAX is tagged, or in a group the operator has explicitly
+			// handed over. Otherwise it makes sure the operator SEES the mention
+			// and lets them answer, which is what a tag of a person means.
+			context_ = "A monitored GROUP chat @-MENTIONED " + operatorDesc + " — the PERSON, not you. They are in this group and answer for themselves."
+			policy = "   - This is a tag of your operator, not of you. Do NOT reply on their behalf, and do NOT send an acknowledgement, a holding message or an \"on it\" — they are in the group and will answer. A reply from you here arrives seconds before theirs and makes them look like they are not present.\n" +
+				"   - Use INFORM so the mention reaches them: say who tagged them and what is being asked. That is the whole job here.\n" +
+				"   - Reply in the chat ONLY if the message is addressed to YOU by name, or the operator has previously told you to handle this group.\n" +
+				"   - If it is something only the operator can personally do and has a deadline, flag REMIND instead.\n"
 		} else if replyGroup {
 			// Trusted working group: the operator wants KARMAX to act as them here,
 			// like a small client/project group where a reply is expected.
@@ -504,7 +518,7 @@ func sendAwayNote(chatID, who string, incoming string, isGroup bool) {
 
 	setting := "a 1:1 WhatsApp chat"
 	if isGroup {
-		setting = "a WhatsApp group where the operator was @-mentioned"
+		setting = "a WhatsApp group where KARMAX itself was addressed"
 	}
 	// Who the operator is, for the note's wording. Configurable per install
 	// (KARMAX_LOOP_WA_MONITOR_OPERATOR_NAME); generic when unset.

@@ -249,3 +249,22 @@ func TestBroadcastFeedsAreNotConversations(t *testing.T) {
 		}
 	}
 }
+
+func TestATagOfTheOperatorIsNotARequestToKarmax(t *testing.T) {
+	// The exact case: a group, the operator's number tagged, KARMAX not addressed.
+	if answersInChat(true, true, false, false) {
+		t.Error("a group tag of the operator must NOT produce a reply from KARMAX — the operator is there and answers themselves")
+	}
+	// KARMAX itself tagged, or a reply to something it sent.
+	if !answersInChat(true, false, false, true) {
+		t.Error("KARMAX being addressed directly must still be answered")
+	}
+	// A group the operator explicitly handed over.
+	if !answersInChat(true, true, true, false) {
+		t.Error("a configured reply-group must still be answered as the operator")
+	}
+	// A 1:1 chat is the proxy case and is unchanged.
+	if !answersInChat(false, false, false, false) {
+		t.Error("a DM must still be answered")
+	}
+}

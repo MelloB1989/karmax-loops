@@ -271,3 +271,25 @@ func isBroadcastFeed(chatID string) bool {
 		strings.HasSuffix(id, "@broadcast") ||
 		strings.HasSuffix(id, "@status")
 }
+
+// answersInChat reports whether KARMAX should put a message in the chat itself,
+// as opposed to making sure the operator sees it.
+//
+// A tag of the OPERATOR in a group is not a request to KARMAX. The operator is
+// in that group and answers for themselves; a reply sent on their behalf lands
+// seconds before theirs and makes them look absent. The group tag that started
+// this got "causing misunderstandings" and "it doesn't feel professional" from
+// the person who sent it.
+//
+// KARMAX answers when it is itself addressed, in a DM it proxies, or in a group
+// the operator has explicitly handed over.
+func answersInChat(isGroup, operatorMentioned, replyGroup, commanded bool) bool {
+	if commanded {
+		return true
+	}
+	if !isGroup || replyGroup {
+		return true
+	}
+	_ = operatorMentioned
+	return false
+}
