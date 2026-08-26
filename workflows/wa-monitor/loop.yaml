@@ -1,5 +1,5 @@
 name: wa-monitor
-version: "1.7.0"
+version: "1.8.0"
 description: >
   The proactive WhatsApp proxy. Reacts to incoming messages in monitored chats,
   answers what it confidently can in the operator's voice, and escalates
@@ -34,6 +34,8 @@ tools:
   - whatsapp_send_message
   - whatsapp_search_messages
   - whatsapp.monitored
+  - whatsapp.view_media
+  - memory.retrieve
 
 capabilities:
   - tool:agent.ask

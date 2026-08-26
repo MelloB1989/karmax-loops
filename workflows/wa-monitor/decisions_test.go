@@ -268,3 +268,32 @@ func TestATagOfTheOperatorIsNotARequestToKarmax(t *testing.T) {
 		t.Error("a DM must still be answered")
 	}
 }
+
+// Recall is a semantic search, and it was being handed keyword soup: a filter
+// that kept only words of five characters or more turned the message that
+// mattered into the sender's name. Memory held the answer and was never asked.
+func TestRecallQueryKeepsTheWordsThatCarryTheMeaning(t *testing.T) {
+	q := recallQuery("Shiva Charan", "Got reply from that rich guy")
+	for _, want := range []string{"rich", "guy"} {
+		if !strings.Contains(q, want) {
+			t.Errorf("recallQuery dropped %q — the query was %q", want, q)
+		}
+	}
+	if !strings.Contains(q, "Shiva") {
+		t.Errorf("the sender should anchor the query, got %q", q)
+	}
+}
+
+func TestRecallQuerySurvivesAVeryShortMessage(t *testing.T) {
+	q := recallQuery("Shiva Charan", "Wt he said")
+	if !strings.Contains(q, "said") || !strings.Contains(q, "wt") {
+		t.Errorf("a short message must still produce a usable query, got %q", q)
+	}
+}
+
+func TestRecallQueryIsCapped(t *testing.T) {
+	long := strings.Repeat("投 milestone deliverable ", 60)
+	if q := recallQuery("Shiva", long); len(q) > 240 {
+		t.Errorf("query is %d chars, must be capped", len(q))
+	}
+}

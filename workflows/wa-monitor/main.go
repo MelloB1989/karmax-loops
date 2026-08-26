@@ -371,7 +371,9 @@ func monitor() error {
 			"Latest message: " + content + "\n\n" +
 			shortMem +
 			"Recent thread (oldest first):\n" + truncate(thread, 4000) + "\n\n" +
-			"You have ONE tool: `wacli`, the operator's WhatsApp CLI. Use it to look things up before answering — e.g. read another conversation with\n" +
+			"You can SEE IMAGES and read documents: call `whatsapp.view_media` with this chat id and the message_id of the media message. NEVER tell anyone you cannot open an image, a sticker or a file — you can. Look, then answer about what is actually in it.\n" +
+			"You can also search long-term memory with `memory.retrieve` when someone refers to a person, deal or thread you do not immediately recognise (\"that rich guy\", \"the mail I sent\") — look it up instead of saying you do not remember.\n\n" +
+			"You also have `wacli`, the operator's WhatsApp CLI. Use it to look things up before answering — e.g. read another conversation with\n" +
 			"  args: [\"messages\", \"--chat\", \"<name|phone|jid>\", \"--limit\", \"15\"]\n" +
 			"or resolve a person with args: [\"resolve\", \"<name>\"]. If someone asks what another chat said, LOOK IT UP instead of saying you can't see it.\n\n" +
 			justRepliedNote(justReplied) +
@@ -390,7 +392,7 @@ func monitor() error {
 		outcome := ""
 		escalate := true
 
-		if gwOut, gwErr := loopwasm.Gateway(gwPrompt, "wacli"); gwErr != nil {
+		if gwOut, gwErr := loopwasm.Gateway(gwPrompt, "wacli", "whatsapp.view_media", "memory.retrieve"); gwErr != nil {
 			if !addressed {
 				// The harness has a shell and sends on its own authority. A
 				// group KARMAX does not speak in never reaches it: worst case

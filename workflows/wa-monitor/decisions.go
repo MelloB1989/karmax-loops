@@ -215,26 +215,47 @@ func (g *chatGate) release() bool {
 // recallQuery picks the words worth searching memory for: the sender's first
 // name and the message's distinctive words.
 func recallQuery(senderName, content string) string {
+	// The message itself is the query. Long-term recall is a semantic search,
+	// and it was being handed keyword soup: this kept only words of five
+	// characters or more, so "Got reply from that rich guy" asked memory about
+	// "Shiva reply" — the two words that carried the whole meaning were three
+	// and four letters long and were thrown away. "Wt he said" reduced to the
+	// sender's name alone. Memory held the answer (an investor pitch from
+	// Sachin Sharma at Tracxn, with Shiva sending the intro mail first) and was
+	// never asked for it, so the proxy said it did not remember.
+	//
+	// Short words are most of a WhatsApp message. The filter now only trims
+	// obvious filler, keeps everything else in the order it was written, and
+	// caps by length rather than by word count.
 	words := []string{}
 	if f := strings.Fields(senderName); len(f) > 0 && len(f[0]) >= 3 {
 		words = append(words, f[0])
 	}
 	for _, w := range strings.Fields(content) {
 		w = strings.Trim(strings.ToLower(w), ".,!?()[]\"'@:;")
-		if len(w) >= 5 && !recallStop[w] {
-			words = append(words, w)
-			if len(words) >= 5 {
-				break
-			}
+		if len(w) < 2 || recallStop[w] {
+			continue
 		}
+		words = append(words, w)
 	}
-	return strings.Join(words, " ")
+	q := strings.Join(words, " ")
+	const maxQuery = 220
+	if len(q) > maxQuery {
+		q = strings.TrimSpace(q[:maxQuery])
+	}
+	return q
 }
 
+// recallStop is filler that adds nothing to a semantic search. Kept small on
+// purpose: with short words now included, an over-eager list would strip the
+// meaning out of exactly the messages this was widened to serve.
 var recallStop = map[string]bool{
 	"about": true, "there": true, "please": true, "should": true, "would": true,
 	"could": true, "until": true, "karmax": true, "replying": true, "message": true,
-	"today": true, "tomorrow": true, "going": true, "still": true, "thing": true,
+	"the": true, "and": true, "for": true, "that": true, "this": true, "with": true,
+	"from": true, "have": true, "has": true, "was": true, "are": true, "is": true,
+	"it": true, "to": true, "of": true, "in": true, "on": true, "at": true,
+	"me": true, "my": true, "you": true, "your": true, "we": true, "us": true,
 }
 
 // disclosureReason pulls the KNOWS_KARMAX line out of a model's answer.
