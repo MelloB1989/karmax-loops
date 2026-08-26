@@ -325,3 +325,47 @@ func TestSendKeyMatchesWhatWasRecorded(t *testing.T) {
 		t.Error("the chat must be part of the key")
 	}
 }
+
+// The exact message that went out seven times, ending with the contact's own
+// insult quoted back at him as a control line.
+func TestTheDirectiveNeverReachesTheReader(t *testing.T) {
+	sent := `KARMAX here. I called Kartik and he hasn't answered yet — I'll keep trying.
+Do you want me to keep calling, call someone else, or go there?
+KNOWS_KARMAX: "fk you karmax"`
+
+	got := stripDirectives(sent)
+	if strings.Contains(got, "KNOWS_KARMAX") {
+		t.Fatalf("the control line was sent to the reader: %q", got)
+	}
+	if !strings.Contains(got, "keep calling") {
+		t.Error("the actual message must survive")
+	}
+	if strings.HasSuffix(got, "\n") {
+		t.Error("the trailing blank left by the removed line should be trimmed")
+	}
+}
+
+// A model that puts its outcome verb first would otherwise send it.
+func TestOutcomeVerbsAreStrippedWhereverTheyLand(t *testing.T) {
+	got := stripDirectives("ACTED: replied to Shiva\nHey — 5am Tuesday works 👍")
+	if strings.Contains(got, "ACTED") {
+		t.Errorf("an outcome line must not be sent: %q", got)
+	}
+	if got != "Hey — 5am Tuesday works 👍" {
+		t.Errorf("got %q", got)
+	}
+}
+
+// A sentence that mentions a directive word is a sentence, not a directive.
+func TestOrdinaryProseIsLeftAlone(t *testing.T) {
+	for _, msg := range []string{
+		"I'll remind you tomorrow about the demo",
+		"Approve the invoice when you get a sec",
+		"Note that the meet moved to 10:30",
+		"skip lunch, I'm running late",
+	} {
+		if got := stripDirectives(msg); got != msg {
+			t.Errorf("stripDirectives(%q) = %q — ordinary text was eaten", msg, got)
+		}
+	}
+}

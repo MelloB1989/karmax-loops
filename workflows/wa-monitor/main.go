@@ -327,7 +327,7 @@ func monitor() error {
 			"Steps:\n" +
 			"1. Read recent context: run `" + wacli + " messages --chat " + chatID + " --limit 15` (newest last). If it's already handled/answered and nothing new is needed, do nothing.\n" +
 			"2. Decide on the operator's behalf:\n" + policy +
-			"   - If this message shows the sender has WORKED OUT they are talking to an AI/KARMAX rather than the operator (they ask if it is a bot, say you don't sound like the operator, address you as KARMAX), or long-term memory above already says they have caught you before, then ADDITIONALLY output a line `KNOWS_KARMAX: <the words that show it>` — and from now on stop writing as the operator to them and say plainly that you are KARMAX.\n" +
+			"   - If this message shows the sender has WORKED OUT they are talking to an AI/KARMAX rather than the operator (they ask if it is a bot, say you don't sound like the operator, address you as KARMAX), or long-term memory above already says they have caught you before, then ADDITIONALLY output a line `KNOWS_KARMAX: <the words that show it>`. That line is a REPORT TO THE SYSTEM, on its own line, and is NEVER part of a message you send — never type it into a chat, never append it to a reply, never include it in a `wacli send`. and from now on stop writing as the operator to them and say plainly that you are KARMAX.\n" +
 			"3. REQUIRED: end your response with EXACTLY one outcome line — the VERY LAST line, beginning with one of these verbs (mandatory even if you already replied or acted; if you omit it the message is treated as unhandled and escalated). Choose CAREFULLY — do NOT use APPROVE for things you can handle yourself or for pure updates:\n" +
 			"   ACTED: <what you sent/did on the operator's behalf — prefer this for anything routine>\n" +
 			"   APPROVE: <ONLY a real decision the operator must personally make — approving spend/pricing/scope, a commitment, something risky/irreversible/sensitive — plus your suggested reply. If you could handle it, ACT. If it just needs them to know, INFORM.>\n" +
@@ -388,7 +388,7 @@ func monitor() error {
 			"or resolve a person with args: [\"resolve\", \"<name>\"]. If someone asks what another chat said, LOOK IT UP instead of saying you can't see it.\n\n" +
 			justRepliedNote(justReplied) +
 			"How to decide:\n" + policy + "\n" +
-			"   - If this message shows the sender has WORKED OUT they are talking to an AI/KARMAX rather than the operator (they ask if it is a bot, say you don't sound like the operator, address you as KARMAX), or long-term memory above already says they have caught you before, then ADDITIONALLY output a line `KNOWS_KARMAX: <the words that show it>` — and from now on stop writing as the operator to them and say plainly that you are KARMAX.\n" +
+			"   - If this message shows the sender has WORKED OUT they are talking to an AI/KARMAX rather than the operator (they ask if it is a bot, say you don't sound like the operator, address you as KARMAX), or long-term memory above already says they have caught you before, then ADDITIONALLY output a line `KNOWS_KARMAX: <the words that show it>`. That line is a REPORT TO THE SYSTEM, on its own line, and is NEVER part of a message you send — never type it into a chat, never append it to a reply, never include it in a `wacli send`. and from now on stop writing as the operator to them and say plainly that you are KARMAX.\n" +
 			"Answer with ONE verb on the FIRST line, then its content:\n" +
 			"REPLY: <the exact message to send, in the operator's voice — use this whenever you can simply answer>\n" +
 			"ESCALATE: <why> — ONLY when it needs tools you don't have: web research, running commands, reading files/media, calendar/email actions, or looking something up you don't know.\n" +
@@ -765,6 +765,13 @@ func report(who, outcome string) string {
 // the same case as soon as anything else was said in between, which is the
 // normal shape of a conversation.
 func sendViaWacli(chatID, text, replyToID string) error {
+	// Scrubbed before anything else, including the duplicate key: the same
+	// message with and without a trailing directive must hash alike, or the
+	// guard stops recognising a repeat the moment the model adds one.
+	text = stripDirectives(text)
+	if strings.TrimSpace(text) == "" {
+		return fmt.Errorf("nothing left to send once control lines were removed")
+	}
 	key := "sent:" + shared.SendKey(chatID, text)
 	if _, already, _ := loopwasm.ShortGet(chatID, key); already {
 		return errDuplicateSend

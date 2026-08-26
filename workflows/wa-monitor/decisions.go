@@ -314,3 +314,44 @@ func answersInChat(isGroup, operatorMentioned, replyGroup, commanded bool) bool 
 	_ = operatorMentioned
 	return false
 }
+
+// stripDirectives removes the control lines the model is asked to emit
+// alongside its answer, so they never reach the person being written to.
+//
+// The gateway is told to end with an outcome verb and, when someone has worked
+// out they are talking to KARMAX, an extra KNOWS_KARMAX line. The parser reads
+// the verb and treats everything after it as the message, so the directive rode
+// along into the text and was sent. Seven messages to one contact ended with
+// `KNOWS_KARMAX: "fk you karmax"` — his own insult, quoted back at him, once
+// per reply.
+//
+// Only whole lines that OPEN with a known directive and a colon are removed. A
+// sentence that happens to mention one is a sentence.
+func stripDirectives(text string) string {
+	lines := strings.Split(text, "\n")
+	kept := make([]string, 0, len(lines))
+	for _, line := range lines {
+		if isDirectiveLine(line) {
+			continue
+		}
+		kept = append(kept, line)
+	}
+	return strings.TrimSpace(strings.Join(kept, "\n"))
+}
+
+func isDirectiveLine(line string) bool {
+	l := strings.ToUpper(strings.TrimSpace(strings.TrimLeft(strings.TrimSpace(line), "-*#> ")))
+	for _, d := range directiveTokens {
+		if strings.HasPrefix(l, d+":") || strings.HasPrefix(l, "**"+d+":") {
+			return true
+		}
+	}
+	return false
+}
+
+// directiveTokens are the loop's own control vocabulary. The outcome verbs are
+// here as well as KNOWS_KARMAX: the outcome line is meant for the loop, and a
+// model that puts it before its reply instead of after would otherwise send it.
+var directiveTokens = []string{
+	"KNOWS_KARMAX", "ACTED", "APPROVE", "REMIND", "INFORM", "SKIP", "ESCALATE", "REPLY", "NOTE",
+}
