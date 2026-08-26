@@ -3,6 +3,7 @@
 package main
 
 import (
+	"github.com/MelloB1989/karmax-loops/workflows/internal/shared"
 	"strings"
 	"testing"
 )
@@ -295,5 +296,32 @@ func TestRecallQueryIsCapped(t *testing.T) {
 	long := strings.Repeat("投 milestone deliverable ", 60)
 	if q := recallQuery("Shiva", long); len(q) > 240 {
 		t.Errorf("query is %d chars, must be capped", len(q))
+	}
+}
+
+// KARMAX and the operator send from the SAME account, so "from me" cannot tell
+// them apart. What separates them is that KARMAX records every message it
+// sends, keyed by chat and normalized text — so a send it has no record of was
+// typed by the operator. This pins that key, because if it ever stops matching
+// what sendViaWacli writes, the proxy silently starts talking over the
+// operator again.
+func TestSendKeyMatchesWhatWasRecorded(t *testing.T) {
+	const chat = "150285251002514@lid"
+	const text = "Bruh crazy"
+
+	if shared.SendKey(chat, text) != shared.SendKey(chat, text) {
+		t.Fatal("the key must be stable for the same chat and text")
+	}
+	// The model rewraps and recases its own drafts; those are the same message.
+	if shared.SendKey(chat, "Bruh crazy") != shared.SendKey(chat, "  bruh   CRAZY ") {
+		t.Error("whitespace and case must not produce a different key")
+	}
+	// A genuinely different message must not collide.
+	if shared.SendKey(chat, text) == shared.SendKey(chat, "Wt he said") {
+		t.Error("different messages must not share a key")
+	}
+	// The same words in another chat are another message.
+	if shared.SendKey(chat, text) == shared.SendKey("90391898509410@lid", text) {
+		t.Error("the chat must be part of the key")
 	}
 }

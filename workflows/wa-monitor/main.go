@@ -129,6 +129,16 @@ func monitor() error {
 		return nil
 	}
 
+	// The operator typing in a chat outranks the proxy answering it. They are
+	// holding the conversation themselves; a second voice on the same account,
+	// interleaved with theirs, is two people wearing one name. Being addressed
+	// directly still gets through — if someone tags KARMAX or replies to it
+	// while the operator is there, that is meant for KARMAX.
+	if !commanded && operatorIsHandling(chatID) {
+		loopwasm.Log("wa-monitor: standing down in %q — the operator is typing there", chatID)
+		return nil
+	}
+
 	// A broadcast feed is not a conversation. Newsletters and status updates
 	// arrive as ordinary messages and read as 1:1 chats — is_group is false —
 	// so the loop composed a reply to a WhatsApp channel, sent it into a place
@@ -627,6 +637,59 @@ func operatorSpokeRecently(chatID string) bool {
 // operatorPresentWindow is how recently the operator must have spoken in a
 // chat to count as present in it.
 const operatorPresentWindow = 45 * time.Minute
+
+// operatorTypingWindow is how long the proxy stays out of a chat after the
+// operator has typed in it themselves.
+//
+// Shorter than operatorPresentWindow on purpose: that one answers "is the
+// operator around", this one answers "are they mid-conversation right now",
+// and the second stops being true much sooner.
+const operatorTypingWindow = 12 * time.Minute
+
+// operatorIsHandling reports whether the operator is themselves typing in this
+// chat, as opposed to KARMAX having spoken in it.
+//
+// Both send from the same account, so "from me" alone cannot tell them apart —
+// which is why the existing presence check could not be used for this. What
+// separates them is that KARMAX writes down everything it sends: an outgoing
+// message inside the window that KARMAX has no record of sending is one the
+// operator typed.
+//
+// Watching Shiva's thread is what this is for. The operator was answering him
+// live — "Tf", "Wt he said", "Bruh crazy" — while the proxy replied to the same
+// messages in between, so one side of the conversation was two people at once.
+func operatorIsHandling(chatID string) bool {
+	out, err := loopwasm.Tool("whatsapp_search_messages", map[string]any{
+		"chat": chatID, "from_me": "yes", "limit": 8,
+	})
+	if err != nil {
+		// Unknown is not "the operator is busy". Guessing yes here would make
+		// an unrelated failure look like a policy of silence.
+		return false
+	}
+	var res struct {
+		Messages []struct {
+			Content   string `json:"content"`
+			Timestamp string `json:"timestamp"`
+		} `json:"messages"`
+	}
+	if json.Unmarshal([]byte(out), &res) != nil {
+		return false
+	}
+	for _, m := range res.Messages {
+		when, perr := time.Parse(time.RFC3339, m.Timestamp)
+		if perr != nil || time.Since(when) > operatorTypingWindow {
+			continue
+		}
+		if strings.TrimSpace(m.Content) == "" {
+			continue // media and stickers carry no text to match on
+		}
+		if _, mine, _ := loopwasm.ShortGet(chatID, "sent:"+shared.SendKey(chatID, m.Content)); !mine {
+			return true
+		}
+	}
+	return false
+}
 
 // report routes the harness outcome deterministically and ALWAYS logs the
 // decision (so a "why didn't it act?" is answerable from the journal). Returns
