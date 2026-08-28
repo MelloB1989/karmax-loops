@@ -355,3 +355,43 @@ func isDirectiveLine(line string) bool {
 var directiveTokens = []string{
 	"KNOWS_KARMAX", "ACTED", "APPROVE", "REMIND", "INFORM", "SKIP", "ESCALATE", "REPLY", "NOTE",
 }
+
+// withoutReplyPrefix removes the "[replying to: ...]" that WhatsApp prepends to
+// a quoted message's stored text.
+//
+// KARMAX records what it SENT; the store holds what WhatsApp KEPT, and for a
+// quoted reply those differ by this prefix. Hashing the stored form therefore
+// never matched the recorded one, so KARMAX read its own replies as the
+// operator typing and muted itself for twelve minutes each time — which is how
+// two direct requests in a row got no answer at all.
+//
+// The prefix nests, because a reply to a reply quotes the quote, so the
+// brackets are matched rather than searched for.
+func withoutReplyPrefix(content string) string {
+	for {
+		s := strings.TrimSpace(content)
+		if !strings.HasPrefix(s, "[replying to:") {
+			return s
+		}
+		depth := 0
+		end := -1
+		for i, r := range s {
+			switch r {
+			case '[':
+				depth++
+			case ']':
+				depth--
+				if depth == 0 {
+					end = i
+				}
+			}
+			if end >= 0 {
+				break
+			}
+		}
+		if end < 0 || end+1 >= len(s) {
+			return s
+		}
+		content = s[end+1:]
+	}
+}

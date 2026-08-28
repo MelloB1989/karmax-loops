@@ -684,7 +684,13 @@ func operatorIsHandling(chatID string) bool {
 		if strings.TrimSpace(m.Content) == "" {
 			continue // media and stickers carry no text to match on
 		}
-		if _, mine, _ := loopwasm.ShortGet(chatID, "sent:"+shared.SendKey(chatID, m.Content)); !mine {
+		// Compared on the text KARMAX sent, not the text WhatsApp kept: a
+		// quoted reply is stored with the quote in front of it.
+		body := withoutReplyPrefix(m.Content)
+		if strings.TrimSpace(body) == "" {
+			continue
+		}
+		if _, mine, _ := loopwasm.ShortGet(chatID, "sent:"+shared.SendKey(chatID, body)); !mine {
 			return true
 		}
 	}

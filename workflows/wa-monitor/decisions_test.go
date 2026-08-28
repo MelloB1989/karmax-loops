@@ -369,3 +369,38 @@ func TestOrdinaryProseIsLeftAlone(t *testing.T) {
 		}
 	}
 }
+
+// The exact message that muted KARMAX: it sent the reply text, WhatsApp stored
+// it with the quote in front, and the two hashed differently — so its own reply
+// looked like the operator typing and it stood down for twelve minutes. Shiva
+// asked it to do two things in that window and got silence.
+func TestKarmaxRecognisesItsOwnQuotedReply(t *testing.T) {
+	const chat = "150285251002514@lid"
+	sent := "KARMAX here — I can’t open websites directly for you."
+	stored := "[replying to: karmax open xnxx.live] " + sent
+
+	if shared.SendKey(chat, withoutReplyPrefix(stored)) != shared.SendKey(chat, sent) {
+		t.Fatal("a quoted reply must hash to the same key as the text that was sent")
+	}
+}
+
+// A reply to a reply quotes the quote.
+func TestNestedQuotesAreUnwrapped(t *testing.T) {
+	stored := "[replying to: [replying to: original] middle] the actual message"
+	if got := withoutReplyPrefix(stored); got != "the actual message" {
+		t.Errorf("got %q, want the message with every quote layer removed", got)
+	}
+}
+
+// A message that merely contains a bracket is not a quote.
+func TestOrdinaryTextWithBracketsSurvives(t *testing.T) {
+	for _, msg := range []string{
+		"push truststrike to main [urgent]",
+		"see [1] in the doc",
+		"plain message",
+	} {
+		if got := withoutReplyPrefix(msg); got != msg {
+			t.Errorf("withoutReplyPrefix(%q) = %q", msg, got)
+		}
+	}
+}
