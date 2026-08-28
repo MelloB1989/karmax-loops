@@ -201,6 +201,17 @@ func monitor() error {
 		}
 		identity += "\n"
 
+		// Name the operator outright. The prompt used to identify him only by
+		// JID, so the model reached for a name and found the wrong one: memory
+		// records that some legacy accounts use "Nikhil", and a different real
+		// person is called that. It signed eleven messages in a work group
+		// "KARMAX (on behalf of Nikhil)" and, because its own messages are in
+		// the thread it reads for context, copied the mistake forward every
+		// turn until it was saying "I'm Nikhil's assistant".
+		if name := strings.TrimSpace(loopwasm.Config("operator_name")); name != "" {
+			identity += "The operator you work for is " + name + ". That is the ONLY name you use for them — when you sign, when you refer to them, always. If any note, memory or earlier message in this thread calls them anything else, that is wrong and you do not copy it. Never invent or infer their name from an email address, a login, or a message you sent before.\n"
+		}
+
 		// Speak AS the operator only to people who still think that is who they
 		// are talking to. Somebody who has already worked out they are talking
 		// to KARMAX gets the truth instead — keeping up the act after being
@@ -231,6 +242,9 @@ func monitor() error {
 				ids = append(ids, id)
 			}
 			operatorDesc = "the operator (their own numbers/JIDs: " + strings.Join(ids, ", ") + ")"
+			if name := strings.TrimSpace(loopwasm.Config("operator_name")); name != "" {
+				operatorDesc = name + ", " + operatorDesc
+			}
 		}
 
 		// addressed = somebody is talking TO KARMAX and expects KARMAX to answer.
