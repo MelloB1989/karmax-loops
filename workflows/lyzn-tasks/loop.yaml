@@ -1,0 +1,29 @@
+name: lyzn-tasks
+version: 1.0.0
+description: >
+  Picks up the commitments the operator approved in the LYZN app, does each one
+  through the coding harness on their own machine, and posts the outcome back so
+  LYZN prints the receipt.
+
+# The poll IS the connection. LYZN cannot reach a laptop behind a home router
+# and karmax-desktop pins the KARMAX API to 127.0.0.1, so nothing is ever pushed
+# at this loop. Two minutes is the worst-case delay between approving something
+# on the phone and this machine starting it.
+#
+# It is also the heartbeat, and LYZN calls a daemon offline after 90 seconds of
+# silence — so the app's dot goes out between beats. Change this to
+# "0 * * * * *" if you would rather it stayed lit; the loop is idempotent and
+# costs one request when the queue is empty.
+schedule: "0 */2 * * * *"
+memory_mb: 48
+
+# One host, one harness, two ways to speak. No memory: this loop remembers
+# nothing between runs, because LYZN already knows which tasks are open and a
+# second record of that is a second thing that can be wrong.
+host: [log, config, http, harness, notify, propose]
+
+capabilities:
+  - http:api.lyzn.ai
+  - tool:harness
+  - tool:app.push
+  - tool:propose

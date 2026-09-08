@@ -1,0 +1,164 @@
+# The commitments you approved in the LYZN app, carried out on your own laptop.
+#
+# LYZN hears a promise you made out loud, shows it to you, and waits for you to
+# approve it. Then somebody has to actually do the thing — which LYZN cannot,
+# because the work is your shell, your files and your signed-in accounts. This
+# recipe is that half.
+#
+# It polls, and that is not a shortcut: a laptop behind a home router has no
+# address LYZN could reach, and karmax-desktop pins the KARMAX API to
+# 127.0.0.1, so nothing can be pushed at it. The schedule below IS the
+# connection.
+#
+# It brings no model and no key of its own. The harness runs on whatever you
+# already configured — your own Claude Code or Codex subscription — and nothing
+# in this file names a model, an endpoint or a token for it. That is the whole
+# of the Act plan's credential story, and it stays true under Act Pro: which
+# API the harness talks to is the harness's configuration, never this loop's.
+#
+# WHAT IT STILL NEEDS. Three additions to LYZN's daemon API, all additive to
+# what backend/docs/daemon-api.md already documents, because a recipe can read
+# a JSON array of scalars and nothing else — it has no way to reach into an
+# object. docs/lyzn.md states them exactly. Until they are live, a paired
+# laptop fails this run at its second request and claims nothing.
+#   1. GET /daemons/work?format=ids  answers a top-level JSON array of task ids
+#   2. the claim's task carries text, quote, dueAt and context, as the poll does
+#   3. POST /daemons/work/:id/result accepts a text/plain body (the harness's
+#      whole reply) and answers text/plain: empty, or the one sentence to show
+#      the operator
+name: lyzn-tasks
+on:
+  # Two minutes is the worst case between approving something on your phone and
+  # this machine starting it. It is also the heartbeat, and LYZN calls a daemon
+  # offline after 90 seconds of silence — so the dot in the app goes out between
+  # beats. Change this to "0 * * * * *" if you would rather it stayed lit.
+  schedule: "0 */2 * * * *"
+
+steps:
+  # Your daemon token — the one line in this file you edit.
+  #
+  # A recipe cannot read a setting. KARMAX hands loops their config through
+  # k.Config, and that is a Go-tier affordance the YAML tier never got, so
+  # there is nowhere else for this to live. A one-item list is how a recipe
+  # names a value it can then refer to, and it makes the empty case work
+  # properly: leave it as "" and every step below is skipped, one line goes to
+  # the log, and nothing is sent to a service this machine has no account with.
+  #
+  # Get one from the LYZN app — Settings → Pair a laptop — and redeem the code
+  # as docs/lyzn.md shows. The token is 43 characters and is shown once.
+  - foreach:
+      as: token
+      in: [""]
+      steps:
+
+        # Says the machine is alive, so the app can show it. The answer carries
+        # how many tasks are waiting, which a recipe cannot read — so the work
+        # poll below runs either way, and an idle laptop costs two requests
+        # every two minutes.
+        - when: "{{ .token }}"
+          http:
+            method: POST
+            url: https://api.lyzn.ai/daemons/heartbeat
+            header.Authorization: "Bearer {{ .token }}"
+            header.Content-Type: application/json
+            body: '{"status":"online"}'
+          else:
+            - log: >
+                lyzn-tasks: this laptop is not paired with LYZN. Open the app →
+                Settings → Pair a laptop, redeem the code as docs/lyzn.md shows,
+                and put the token on the one line in this file that holds it.
+
+        # What has been approved and nobody has claimed, oldest first. Ids
+        # rather than whole tasks because foreach can only walk a JSON array of
+        # scalars; the task itself arrives with the claim.
+        - when: "{{ .token }}"
+          http:
+            url: https://api.lyzn.ai/daemons/work?format=ids
+            header.Authorization: "Bearer {{ .token }}"
+          as: ids
+
+        # An empty queue is the normal case, and "[]" is false here — so is the
+        # unset binding an unpaired run leaves behind. Both mean: stop.
+        - when: "{{ .ids }}"
+          foreach:
+            as: id
+            in: "{{ .ids }}"
+            steps:
+
+              # Claim before working. This is what stops two laptops paired to
+              # one account both doing the same job: the claim moves the task
+              # out of the queue, and the loser is answered 409 — which fails
+              # this step and ends the sweep. That is the right shape for a
+              # lost race: nothing has been done, and the next run two minutes
+              # from now takes whatever is still waiting.
+              - http:
+                  method: POST
+                  url: "https://api.lyzn.ai/daemons/work/{{ .id }}/claim"
+                  header.Authorization: "Bearer {{ .token }}"
+                as: claimed
+
+              # The task as LYZN gave it to us, JSON and all. It carries what
+              # the harness cannot work out for itself: the tidied instruction,
+              # the sentence that was actually said, the due date, and the
+              # conversation it came out of.
+              #
+              # The last two lines are a contract, not a request. Everything
+              # downstream — the receipt LYZN prints, whether you are
+              # interrupted — is decided by them, and a reply without them is
+              # read as a failure rather than guessed at.
+              - harness: |
+                  The person wearing a LYZN pendant promised this out loud, and has now approved it
+                  in the app for you to do. Here is the task, exactly as LYZN handed it over:
+
+                  {{ .claimed }}
+
+                  Do it now, for real — run the commands, make the change, write the message. You
+                  are on the operator's own machine, with their shell, their files, their signed-in
+                  accounts and the whole karmax CLI. Do not describe what you would do.
+
+                  If you cannot finish because you need something only they can give you — a
+                  password, an account, a decision that is theirs — stop and say so rather than
+                  guessing.
+
+                  End your reply with exactly these two lines and nothing after them:
+                  STATUS: done|blocked|failed
+                  SUMMARY: <one sentence saying what you actually did, or what you are waiting on>
+                as: reply
+
+              # The harness prints refusals to stdout and exits 0, so "it came
+              # back" and "it did the work" are different questions. The whole
+              # reply goes to LYZN, which reads the contract line and decides:
+              # anything that is not STATUS: done is a failure, and a failure
+              # prints a receipt too. Nothing here can report a refusal as a
+              # success, because nothing here claims a status.
+              - when: "{{ .reply }}"
+                http:
+                  method: POST
+                  url: "https://api.lyzn.ai/daemons/work/{{ .id }}/result"
+                  header.Authorization: "Bearer {{ .token }}"
+                  header.Content-Type: text/plain
+                  body: "{{ .reply }}"
+                as: needsyou
+                else:
+                  # An empty answer is not a result. Said plainly, so the task
+                  # is released rather than left claimed by a machine that is
+                  # no longer working on it.
+                  - http:
+                      method: POST
+                      url: "https://api.lyzn.ai/daemons/work/{{ .id }}/result"
+                      header.Authorization: "Bearer {{ .token }}"
+                      header.Content-Type: application/json
+                      body: '{"outcome":"failure","summary":"the coding harness returned nothing"}'
+                  - notify:
+                      title: "LYZN task went nowhere"
+                      body: >
+                        The coding harness returned nothing for a task you
+                        approved. KARMAX's log has the run.
+
+              # LYZN answers with the one sentence worth interrupting you for —
+              # usually work that is finished except for something only you
+              # have — and with nothing at all when the task simply closed.
+              - when: "{{ .needsyou }}"
+                notify:
+                  title: "LYZN — this one needs you"
+                  body: "{{ .needsyou }}"
