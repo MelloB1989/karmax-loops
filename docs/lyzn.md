@@ -29,6 +29,23 @@ this registry decides it.
 
 ---
 
+## Or let KARMAX do the pairing
+
+Since this document was written, KARMAX has grown a first-party `lyzn`
+connector (`internal/connectors/lyzn`, pull request 2 on the KARMAX
+repository). If your KARMAX is new enough to have it, the shell below is
+optional: paste the six characters into Connectors → LYZN in the console, run
+the health check, and the connector redeems the code and keeps the token where
+KARMAX keeps credentials rather than in a YAML file you have to `chmod 600`.
+
+Either build of this loop still works, and the recipe is still the right
+answer when you want the sequence itself written down and editable. The
+connector also raises `lyzn.task.approved` on the bus, so a recipe can react
+to a task instead of polling for one — which is a smaller loop than the one
+below.
+
+---
+
 ## Pairing
 
 **1. Get the code.** In the LYZN app: **Settings → Pair a laptop**. It shows six
