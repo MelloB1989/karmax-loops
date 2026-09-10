@@ -92,7 +92,7 @@ def workflows(artifacts_dir, strict):
 
         # The tools it declares, so "this needs WhatsApp set up" is answerable
         # before installing rather than after it quietly does nothing.
-        tools = re.findall(r"^\s*-\s*([a-z_]+\.[a-z_]+|google_workspace)\s*$", text, re.M)
+        tools = re.findall(r"^\s*-\s*([a-z_]+\.[a-z_]+|google)\s*$", text, re.M)
         if tools:
             entry["requires"] = sorted(set(tools))
         if name in SHIPPED:
