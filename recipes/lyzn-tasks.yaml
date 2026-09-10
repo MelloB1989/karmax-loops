@@ -34,6 +34,14 @@ on:
   # beats. Change this to "0 * * * * *" if you would rather it stayed lit.
   schedule: "0 */2 * * * *"
 
+# What it is allowed to reach, in one list you can read without following every
+# step. Nothing here is inferred: a recipe gets exactly these and nothing else.
+grants:
+  - http:api.lyzn.ai   # LYZN's daemon API — the only host this ever talks to
+  - tool:harness       # the coding assistant, which does the actual work
+  - tool:app.push      # telling you what happened
+  - tool:propose       # asking you first, when it is not sure
+
 steps:
   # Your daemon token — the one line in this file you edit.
   #
