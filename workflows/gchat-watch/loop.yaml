@@ -1,5 +1,5 @@
 name: gchat-watch
-version: 1.0.0
+version: 1.1.0
 description: >
   Watches the operator's Google Chat spaces for pending items and acts, flags or
   reminds — the Google Chat counterpart to chat-sweep.
@@ -9,7 +9,7 @@ memory_mb: 48
 host: [log, config, hosttool, harness, notify, propose, remind, tool, short_set, short_all]
 
 tools:
-  - google_workspace
+  - google
 
 capabilities:
   - memory:nexus

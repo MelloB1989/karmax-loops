@@ -27,7 +27,6 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -217,22 +216,16 @@ func gather(today string) day {
 // Titles only. A calendar entry's description and attendee list are the two
 // things most likely to name somebody, and a post never needs either.
 func meetings() []string {
-	start := time.Now().Truncate(24 * time.Hour)
-	params, _ := json.Marshal(map[string]any{
-		"timeMin":      start.Format(time.RFC3339),
-		"timeMax":      start.Add(24 * time.Hour).Format(time.RFC3339),
-		"singleEvents": true,
-		"maxResults":   20,
-	})
-
 	var cal struct {
-		Items []struct {
+		Events []struct {
 			Summary string `json:"summary"`
-		} `json:"items"`
+		} `json:"events"`
 	}
-	err := loopwasm.ToolJSON("google_workspace", map[string]any{
-		"service": "calendar", "resource": "events", "method": "list",
-		"calendarId": "primary", "params": string(params),
+	// --today rather than a computed window: gog resolves "today" in the
+	// calendar's own timezone, which is the one the operator's day is in. A
+	// UTC-truncated window silently loses the evening for anyone east of it.
+	err := loopwasm.ToolJSON("google", map[string]any{
+		"args": []string{"calendar", "events", "--today", "--max", "20"},
 	}, &cal)
 	if err != nil {
 		loopwasm.Log("daily-post: no calendar: %v", err)
@@ -240,7 +233,7 @@ func meetings() []string {
 	}
 
 	var out []string
-	for _, e := range cal.Items {
+	for _, e := range cal.Events {
 		if s := strings.TrimSpace(e.Summary); s != "" {
 			out = append(out, s)
 		}

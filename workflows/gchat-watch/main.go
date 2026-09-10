@@ -1,6 +1,6 @@
 //go:build wasip1
 
-// Package gchatwatch watches Google Chat (via gws) and proactively acts on
+// Package gchatwatch watches Google Chat (via gog) and proactively acts on
 // new messages: routine dev chores immediately, real decisions flagged.
 package main
 
@@ -16,44 +16,31 @@ import (
 	"github.com/MelloB1989/karmax/pkg/loopwasm"
 )
 
-// gchat-watch: event-based monitoring of Google Chat via the gws CLI. The Go
-// side polls cheaply (spaces list, no LLM) and only when a space has NEW
-// activity does it hand the thread to the Claude harness executor, which acts
-// on the operator's behalf: routine dev chores (close/merge a PR a teammate
-// asked for, quick acks, calendar) are done immediately; real decisions are
-// flagged for approval. First run looks back 24h so pending asks are handled.
+// gchat-watch: event-based monitoring of Google Chat via the gog CLI. The Go
+// side polls cheaply (spaces, then one newest-message probe each, no LLM) and
+// only when a space has NEW activity does it hand the thread to the Claude
+// harness executor, which acts on the operator's behalf: routine dev chores
+// (close/merge a PR a teammate asked for, quick acks, calendar) are done
+// immediately; real decisions are flagged for approval. First run looks back
+// 24h so pending asks are handled.
 const (
-	gchatMaxSpaces   = 5 // spaces handled per tick
+	gchatMaxSpaces   = 5  // spaces handed to the harness per tick
+	gchatMaxProbes   = 40 // spaces whose newest message we look at per tick
 	gchatFirstRunAge = 24 * time.Hour
 )
 
 var gchatMu sync.Mutex
 
 // gchatAuthDown latches the Google-auth state so the operator is alerted ONCE
-// when gws loses authentication (Google's periodic reauth for sensitive scopes
-// invalidates the token — "invalid_rapt"/"invalid_grant"/exit 2), and once more
-// when it recovers — instead of failing silently every 2 minutes. Guarded by
-// gchatMu, which the run holds. errGchatAuth is the sentinel for that state.
+// when gog cannot reach Chat — no authorized account, a revoked refresh token,
+// or an account Chat will not serve — and once more when it recovers, instead
+// of failing silently every few hours. Guarded by gchatMu, which the run holds.
+// errGchatAuth is the sentinel for that state.
 var gchatAuthDown bool
 
 type gchatAuthError struct{ detail string }
 
 func (e *gchatAuthError) Error() string { return "google auth: " + e.detail }
-
-func isGchatAuthError(s string) bool {
-	l := strings.ToLower(s)
-	return strings.Contains(l, "invalid_rapt") || strings.Contains(l, "invalid_grant") ||
-		strings.Contains(l, "autherror") || strings.Contains(l, "auth error") ||
-		strings.Contains(l, "reauth") || strings.Contains(l, "credentials missing") ||
-		strings.Contains(l, "unauthenticated") || strings.Contains(l, "401")
-}
-
-type gchatSpace struct {
-	Name           string `json:"name"` // "spaces/XXXX"
-	DisplayName    string `json:"displayName"`
-	SpaceType      string `json:"spaceType"`
-	LastActiveTime string `json:"lastActiveTime"`
-}
 
 //go:wasmexport run
 func run() {
@@ -68,59 +55,59 @@ func watch() error {
 	}
 	defer gchatMu.Unlock()
 
-	gws := strings.TrimSpace(loopwasm.Config("gws"))
-	if gws == "" {
-		gws = loopwasm.HostTool("gws")
+	gog := strings.TrimSpace(loopwasm.Config("gog"))
+	if gog == "" {
+		gog = loopwasm.HostTool("gog")
 	}
+	// Which mailbox, when the operator has more than one. Empty lets gog pick
+	// its own default, which is right for the single-account case.
+	account := strings.TrimSpace(loopwasm.Config("account"))
 
 	state := loadGchatState()
 
-	spaces, err := listGchatSpaces()
+	spaces, err := listGchatSpaces(account)
 	if err != nil {
-		var authErr *gchatAuthError
-		if errors.As(err, &authErr) {
-			// Latched: alert the operator ONCE (Google reauth for sensitive
-			// scopes needs an interactive `gws auth login` on the host — it
-			// can't be refreshed non-interactively), and stop spamming a WARN
-			// every 2 minutes. Recovery is announced below.
-			if !gchatAuthDown {
-				gchatAuthDown = true
-				msg := "⚠️ Google Workspace access expired (Google Chat/Gmail/Calendar via gws). Run `gws auth login` on the KARMAX host to reconnect — until then I can't watch or act on Google Chat. (" + authErr.detail + ")"
-				_ = loopwasm.Notify("⚠️ Google access expired", msg)
-				loopwasm.Log("gchat-watch: google auth DOWN — %s", authErr.detail)
-			}
+		if down := latchAuth(err); down {
 			return nil
 		}
 		return fmt.Errorf("gchat-watch: list spaces: %w", err)
 	}
 	if gchatAuthDown {
 		gchatAuthDown = false
-		_ = loopwasm.Notify("✅ Google access restored", "Google Workspace is reconnected — I'm watching Google Chat again.")
+		_ = loopwasm.Notify("✅ Google access restored", "Google is reconnected — I'm watching Google Chat again.")
 		loopwasm.Log("gchat-watch: google auth restored")
 	}
 
-	// Find spaces with activity newer than our checkpoint.
-	type active struct {
-		space gchatSpace
-		since string
-	}
+	// Find spaces whose newest message is past our checkpoint.
+	//
+	// gws answered this from the space list itself, which carried a
+	// lastActiveTime. gog's does not, so activity is one cheap probe per space:
+	// the single newest message, newest first, no body needed beyond its time.
 	var work []active
+	cutoff := time.Now().Add(-gchatFirstRunAge).UTC().Format(time.RFC3339)
+	probes := 0
 	for _, sp := range spaces {
-		if sp.Name == "" || sp.LastActiveTime == "" {
+		if sp.Resource == "" {
 			continue
 		}
-		last := state[sp.Name]
-		if last == "" {
-			// First sighting: only look back a bounded window.
-			cutoff := time.Now().Add(-gchatFirstRunAge).UTC().Format(time.RFC3339)
-			if sp.LastActiveTime <= cutoff {
-				state[sp.Name] = sp.LastActiveTime // nothing recent; just record
-				continue
-			}
-			last = cutoff
+		if probes >= gchatMaxProbes {
+			break
 		}
-		if sp.LastActiveTime > last {
-			work = append(work, active{space: sp, since: last})
+		probes++
+		newest, err := newestGchatMessage(sp.Resource, account)
+		if err != nil {
+			if down := latchAuth(err); down {
+				return nil
+			}
+			loopwasm.Log("gchat-watch: %s: %v", sp.Resource, err)
+			continue
+		}
+		hit, record := considerSpace(sp, newest, state[sp.Resource], cutoff)
+		if record != "" {
+			state[sp.Resource] = record
+		}
+		if hit != nil {
+			work = append(work, *hit)
 		}
 	}
 	if len(work) == 0 {
@@ -133,18 +120,18 @@ func watch() error {
 
 	var list strings.Builder
 	for _, w := range work {
-		name := w.space.DisplayName
-		if name == "" {
-			name = "(direct message)"
-		}
-		fmt.Fprintf(&list, "- %q | id: %s | new activity since %s\n", name, w.space.Name, w.since)
+		fmt.Fprintf(&list, "- %q | id: %s | new activity since %s\n", label(w.space), w.space.Resource, w.since)
 	}
 
-	prompt := "You are the operator's proactive Google Chat assistant, working their account via the gws CLI at " + gws + " (Google Workspace; also available: the gh CLI for GitHub, git, and a full shell).\n\n" +
+	as := ""
+	if account != "" {
+		as = " --account " + account
+	}
+	prompt := "You are the operator's proactive Google Chat assistant, working their account via the gog CLI at " + gog + " (Google Workspace; also available: the gh CLI for GitHub, git, and a full shell).\n\n" +
 		"These Google Chat spaces have NEW activity:\n" + list.String() + "\n" +
 		"For EACH space:\n" +
-		"1. Read the recent messages: `" + gws + " chat spaces messages list --parent <space id> --page-size 15` (discover exact flags with --help if needed). Only consider messages newer than the given 'since' time, and ignore messages the operator themself sent (check senders; the operator is the authenticated account — their own asks to others are not for you).\n" +
-		"2. If someone asked the operator to do something ROUTINE that you can complete on this machine — e.g. close or merge a specific PR (`gh pr close`/`gh pr merge` in the right repo), share a link/file they already have, a quick factual answer, scheduling via `gws calendar` — DO IT NOW, then reply briefly in the space via `" + gws + " chat +send --help` (discover syntax) in the operator's casual human voice (never reveal you're an AI).\n" +
+		"1. Read the recent messages: `" + gog + " chat messages list <space id> --max 15 --order \"createTime desc\" --json" + as + "` (run `" + gog + " schema chat messages list` if you need the exact contract). Only consider messages newer than the given 'since' time, and ignore messages the operator themself sent (check senders; the operator is the authenticated account — their own asks to others are not for you).\n" +
+		"2. If someone asked the operator to do something ROUTINE that you can complete on this machine — e.g. close or merge a specific PR (`gh pr close`/`gh pr merge` in the right repo), share a link/file they already have, a quick factual answer, scheduling via `" + gog + " calendar` — DO IT NOW, then reply briefly in the space via `" + gog + " chat messages send <space id> --text \"...\"" + as + "` in the operator's casual human voice (never reveal you're an AI).\n" +
 		"3. If it's a real DECISION, production-destructive (force-push, deleting repos/branches others use), money, or ambiguous — do NOT act; flag it as APPROVE.\n" +
 		"4. If it's something ONLY the operator can personally do (attend something, provide a file/credential you don't have): flag it as REMIND.\n" +
 		"5. Social chatter with no ask → skip.\n\n" +
@@ -160,7 +147,7 @@ func watch() error {
 
 	// Only advance checkpoints for the spaces we actually processed.
 	for _, w := range work {
-		state[w.space.Name] = w.space.LastActiveTime
+		state[w.space.Resource] = w.newest
 	}
 	saveGchatState(state)
 
@@ -175,38 +162,73 @@ func watch() error {
 	return nil
 }
 
-func listGchatSpaces() ([]gchatSpace, error) {
-	raw, err := loopwasm.Tool("google_workspace", map[string]any{
-		"service": "chat", "resource": "spaces", "method": "list"})
-	out := []byte(raw)
-	if err != nil {
-		if isGchatAuthError(string(out)) || strings.Contains(err.Error(), "exit status 2") {
-			return nil, &gchatAuthError{detail: firstLine(string(out))}
-		}
-		return nil, fmt.Errorf("%v: %s", err, strings.TrimSpace(firstLine(string(out))))
+// latchAuth reports whether err is Google being disconnected, alerting once.
+//
+// Once, because the alternative is a WARN every tick for a condition that only
+// a person can clear, and an alert that arrives every four hours is one nobody
+// reads by the second day.
+func latchAuth(err error) bool {
+	var authErr *gchatAuthError
+	if !errors.As(err, &authErr) {
+		return false
 	}
-	// A successful call can still carry an auth-error JSON body (gws exits 0).
-	if isGchatAuthError(string(out)) {
-		return nil, &gchatAuthError{detail: firstLine(string(out))}
+	if !gchatAuthDown {
+		gchatAuthDown = true
+		msg := "⚠️ Google is not connected (Google Chat/Gmail/Calendar via gog). Reconnect Google on the KARMAX host — `gog auth add you@yourdomain.com --services gmail,calendar,chat` — and note that Google Chat needs a Workspace account, not a personal gmail.com one. Until then I can't watch or act on Google Chat. (" + authErr.detail + ")"
+		_ = loopwasm.Notify("⚠️ Google is not connected", msg)
+		loopwasm.Log("gchat-watch: google auth DOWN — %s", authErr.detail)
 	}
+	return true
+}
+
+func listGchatSpaces(account string) ([]gchatSpace, error) {
 	var resp struct {
 		Spaces []gchatSpace `json:"spaces"`
 	}
-	if err := json.Unmarshal(out, &resp); err != nil {
+	if err := gogJSON([]string{"chat", "spaces", "list", "--max", "100"}, account, &resp); err != nil {
 		return nil, err
 	}
 	return resp.Spaces, nil
 }
 
-func firstLine(s string) string {
-	s = strings.TrimSpace(s)
-	if i := strings.IndexByte(s, '\n'); i >= 0 {
-		s = s[:i]
+// newestGchatMessage returns the create time of the latest message in a space,
+// or "" when the space has none.
+func newestGchatMessage(space, account string) (string, error) {
+	var resp struct {
+		Messages []gchatMessage `json:"messages"`
 	}
-	if len(s) > 200 {
-		s = s[:200]
+	err := gogJSON([]string{"chat", "messages", "list", space,
+		"--max", "1", "--order", "createTime desc"}, account, &resp)
+	if err != nil {
+		// An empty space is exit 3 only with --fail-empty, which we don't pass;
+		// but a space the operator can see and not read is a permission error,
+		// and that is this space's problem, not Google being down.
+		return "", err
 	}
-	return s
+	if len(resp.Messages) == 0 {
+		return "", nil
+	}
+	return resp.Messages[0].CreateTime, nil
+}
+
+// gogJSON runs one gog command through KARMAX's google tool and decodes it.
+func gogJSON(args []string, account string, out any) error {
+	input := map[string]any{"args": args}
+	if account != "" {
+		input["account"] = account
+	}
+	raw, err := loopwasm.Tool("google", input)
+	if err != nil {
+		detail := firstLine(err.Error())
+		if isGchatAuthError(err.Error()) || isGchatAuthError(raw) {
+			return &gchatAuthError{detail: detail}
+		}
+		return errors.New(detail)
+	}
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	return json.Unmarshal([]byte(raw), out)
 }
 
 // State lives in short-term memory rather than ~/.karmax/gchat-watch.state.

@@ -28,7 +28,7 @@ the privacy guard, not the rate limit.
 | Source | What it takes | What it does not take |
 |---|---|---|
 | `activity.recent` | The engineering tasks KARMAX ran for you, and whether they finished | The harness output — full of paths, hostnames and occasionally secrets |
-| `google_workspace` | Today's calendar event **titles** | Descriptions and attendee lists, the two fields most likely to name somebody |
+| `google` | Today's calendar event **titles** | Descriptions and attendee lists, the two fields most likely to name somebody |
 | `whatsapp_search_messages` | **Your own outgoing messages**, `from_me: true` | Anything anyone said to you |
 | `recall` | What long-term memory holds about your current work | — |
 
